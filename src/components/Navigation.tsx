@@ -57,6 +57,12 @@ export function Navigation() {
             {user && (
               <>
                 <Link
+                  href="/screenshot"
+                  className="px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
+                >
+                  Upload
+                </Link>
+                <Link
                   href="/test"
                   className="px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
                 >
