@@ -3,22 +3,16 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-interface FeedItem {
+interface Transaction {
   id: string;
-  source: string;
-  title: string;
-  content: string | null;
-  url: string | null;
-  image_url: string | null;
-  author: string | null;
-  author_email: string | null;
-  author_avatar: string | null;
-  metadata: Record<string, any>;
+  stripe_payment_id: string;
+  amount: number;
+  currency: string;
   created_at: string;
 }
 
 export default function FeedPage() {
-  const [items, setItems] = useState<FeedItem[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,36 +27,36 @@ export default function FeedPage() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    // Fetch initial feed items
-    const fetchFeedItems = async () => {
+    // Fetch transactions
+    const fetchTransactions = async () => {
       const { data, error } = await supabase
-        .from("feed_items")
+        .from("transactions")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(50);
 
       if (error) {
-        console.error("Error fetching feed items:", error);
+        console.error("Error fetching transactions:", error);
       } else {
-        setItems(data || []);
+        setTransactions(data || []);
       }
       setLoading(false);
     };
 
-    fetchFeedItems();
+    fetchTransactions();
 
     // Subscribe to real-time updates
     const channel = supabase
-      .channel("feed_items_changes")
+      .channel("transactions_changes")
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
-          table: "feed_items",
+          table: "transactions",
         },
         (payload) => {
-          setItems((prev) => [payload.new as FeedItem, ...prev]);
+          setTransactions((prev) => [payload.new as Transaction, ...prev]);
         }
       )
       .subscribe();
@@ -84,6 +78,11 @@ export default function FeedPage() {
     return date.toLocaleDateString();
   };
 
+  const formatAmount = (amount: number, currency: string) => {
+    // Amount is already in major units (NOK, USD, etc.)
+    return `${currency.toUpperCase()} ${amount.toLocaleString()}`;
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
@@ -99,86 +98,44 @@ export default function FeedPage() {
           Feed
         </h1>
 
-        {items.length === 0 ? (
+        {transactions.length === 0 ? (
           <div className="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-gray-800 dark:bg-gray-900">
             <p className="text-zinc-600 dark:text-zinc-400">
-              No items yet. Set up your Zapier webhooks to start seeing data here!
+              No transactions yet. Set up your Zapier webhooks to start seeing data here!
             </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {items.map((item) => (
+            {transactions.map((transaction) => (
               <div
-                key={item.id}
+                key={transaction.id}
                 className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md dark:border-gray-800 dark:bg-gray-900"
               >
                 <div className="flex items-start gap-4">
-                  {item.image_url && (
-                    <img
-                      src={item.image_url}
-                      alt={item.title}
-                      className="h-12 w-12 rounded-full object-cover"
-                    />
-                  )}
-                  {!item.image_url && item.author_avatar && (
-                    <img
-                      src={item.author_avatar}
-                      alt={item.author || "Author"}
-                      className="h-12 w-12 rounded-full object-cover"
-                    />
-                  )}
-                  {!item.image_url && !item.author_avatar && (
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-700">
-                      <span className="text-lg font-semibold text-gray-600 dark:text-gray-300">
-                        {item.source.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                    <span className="text-xl">💰</span>
+                  </div>
 
                   <div className="flex-1">
                     <div className="mb-1 flex items-center gap-2">
                       <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                        {item.source}
+                        stripe
                       </span>
                       <span className="text-xs text-zinc-400 dark:text-zinc-500">
                         •
                       </span>
                       <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                        {formatDate(item.created_at)}
+                        {formatDate(transaction.created_at)}
                       </span>
                     </div>
 
                     <h2 className="mb-2 text-lg font-semibold text-black dark:text-zinc-50">
-                      {item.url ? (
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:underline"
-                        >
-                          {item.title}
-                        </a>
-                      ) : (
-                        item.title
-                      )}
+                      Payment received: {formatAmount(transaction.amount, transaction.currency)}
                     </h2>
 
-                    {item.content && (
-                      <p className="mb-3 text-zinc-700 dark:text-zinc-300">
-                        {item.content}
-                      </p>
-                    )}
-
-                    {item.author && (
-                      <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-                        <span>by {item.author}</span>
-                        {item.author_email && (
-                          <span className="text-zinc-400 dark:text-zinc-500">
-                            ({item.author_email})
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {transaction.stripe_payment_id}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -189,5 +146,3 @@ export default function FeedPage() {
     </div>
   );
 }
-
-
