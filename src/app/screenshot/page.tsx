@@ -9,6 +9,7 @@ interface Transaction {
   date?: string;
   customer_email?: string;
   status?: string;
+  exists?: boolean; // Flag to indicate if transaction already exists
 }
 
 export default function ScreenshotPage() {
@@ -59,7 +60,72 @@ export default function ScreenshotPage() {
         throw new Error(data.error || "Failed to process screenshot");
       }
 
-      setTransactions(data.transactions || []);
+      const extractedTransactions = data.transactions || [];
+
+      // Check which transactions already exist in Supabase using API endpoint
+      if (extractedTransactions.length > 0) {
+        try {
+          const checkResponse = await fetch("/api/check-duplicates", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ transactions: extractedTransactions }),
+          });
+
+          if (!checkResponse.ok) {
+            const errorData = await checkResponse.json();
+            console.error("Check duplicates API error:", errorData);
+            throw new Error(errorData.error || "Failed to check duplicates");
+          }
+
+          const checkData = await checkResponse.json();
+          const matchedExtractedIds = checkData.matchedExtractedIds || [];
+          const matchDetails = checkData.matchDetails || [];
+          
+          // Create a Set of matched extracted IDs (case-insensitive)
+          const matchedIdsSet = new Set(
+            matchedExtractedIds.map((id: string) => id.toLowerCase().trim())
+          );
+          
+          console.log("Matched transactions:", matchedExtractedIds.length, "out of", extractedTransactions.length);
+          if (matchDetails.length > 0) {
+            console.log("Match details:", matchDetails);
+          }
+
+          // Mark transactions that already exist
+          const transactionsWithFlags = extractedTransactions.map((t: Transaction) => {
+            const normalizedId = t.stripe_payment_id.toLowerCase().trim();
+            const exists = matchedIdsSet.has(normalizedId);
+            
+            if (exists) {
+              const matchDetail = matchDetails.find(
+                (detail: any) => detail.extractedId.toLowerCase().trim() === normalizedId
+              );
+              if (matchDetail) {
+                console.log(
+                  `✓ Matched: ${t.stripe_payment_id} → ${matchDetail.matchedId} (${matchDetail.matchType})`
+                );
+              }
+            } else {
+              console.log(`✗ NOT found in DB: ${t.stripe_payment_id} (${t.amount} ${t.currency})`);
+            }
+            
+            return {
+              ...t,
+              exists,
+            };
+          });
+
+          setTransactions(transactionsWithFlags);
+        } catch (checkError) {
+          console.error("Error checking duplicates:", checkError);
+          // If check fails, still show transactions but without exists flags
+          setTransactions(extractedTransactions);
+        }
+      } else {
+        setTransactions(extractedTransactions);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process screenshot");
     } finally {
@@ -68,7 +134,13 @@ export default function ScreenshotPage() {
   };
 
   const handleConfirm = async () => {
-    if (transactions.length === 0) return;
+    // Only save transactions that don't already exist
+    const newTransactions = transactions.filter((t) => !t.exists);
+
+    if (newTransactions.length === 0) {
+      setError("All transactions already exist in the database");
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -79,7 +151,7 @@ export default function ScreenshotPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ transactions }),
+        body: JSON.stringify({ transactions: newTransactions }),
       });
 
       const data = await response.json();
@@ -183,21 +255,32 @@ export default function ScreenshotPage() {
         )}
 
         {/* Preview Table */}
-        {transactions.length > 0 && (
-          <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-            <div className="p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
-                  Preview ({transactions.length} transactions)
-                </h2>
-                <button
-                  onClick={handleConfirm}
-                  disabled={saving}
-                  className="rounded-lg bg-green-600 px-6 py-2 text-white font-medium transition-colors hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {saving ? "Saving..." : "Confirm & Save"}
-                </button>
-              </div>
+        {transactions.length > 0 && (() => {
+          const newTransactions = transactions.filter((t) => !t.exists);
+          const existingCount = transactions.length - newTransactions.length;
+
+          return (
+            <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+              <div className="p-6">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                      Preview ({transactions.length} transactions)
+                    </h2>
+                    {existingCount > 0 && (
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                        {newTransactions.length} new, {existingCount} already exist
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleConfirm}
+                    disabled={saving || newTransactions.length === 0}
+                    className="rounded-lg bg-green-600 px-6 py-2 text-white font-medium transition-colors hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {saving ? "Saving..." : `Save ${newTransactions.length} New`}
+                  </button>
+                </div>
 
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
@@ -226,9 +309,19 @@ export default function ScreenshotPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
                     {transactions.map((transaction, index) => (
-                      <tr key={index}>
+                      <tr
+                        key={index}
+                        className={transaction.exists ? "bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500" : ""}
+                      >
                         <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          {transaction.stripe_payment_id}
+                          <div className="flex items-center gap-2">
+                            {transaction.stripe_payment_id}
+                            {transaction.exists && (
+                              <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
+                                Exists
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
                           {formatAmount(transaction.amount, transaction.currency)}
@@ -251,9 +344,10 @@ export default function ScreenshotPage() {
                   </tbody>
                 </table>
               </div>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

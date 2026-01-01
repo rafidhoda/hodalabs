@@ -42,18 +42,31 @@ export async function POST(request: NextRequest) {
               type: "text",
               text: `Extract all transaction data from this screenshot. This appears to be a Stripe transactions table.
 
-For each transaction, extract:
-- stripe_payment_id (the payment intent ID, e.g., pi_xxxxx)
-- amount (the numeric amount, as a number)
-- currency (the currency code, e.g., "nok", "usd")
-- date (optional, if visible)
-- customer_email (optional, if visible)
-- status (optional, if visible)
+CRITICAL EXTRACTION RULES:
+1. stripe_payment_id: Copy EXACTLY as shown (usually starts with "pi_"). Be extremely careful with:
+   - Letters vs numbers (e.g., "I" vs "1", "O" vs "0", "G" vs "6")
+   - Case sensitivity (preserve original case)
+   - No extra spaces or characters
+   - Double-check each character matches the screenshot exactly
+
+2. amount: Extract as a NUMBER (not a string), in major currency units:
+   - "NOK 3,999.00" → 3999
+   - "USD 600.00" → 600
+   - "USD 99" → 99
+   - Do NOT convert to minor units (no multiplication by 100)
+
+3. currency: Lowercase currency code (e.g., "nok", "usd", "eur")
+
+4. date: ISO format YYYY-MM-DD if visible (optional)
+
+5. customer_email: Email address if visible (optional)
+
+6. status: Transaction status if visible (optional)
 
 Return ONLY a valid JSON array of transactions in this exact format:
 [
   {
-    "stripe_payment_id": "pi_xxxxx",
+    "stripe_payment_id": "pi_3SjITkFpApLy86NM0jBOGGKb",
     "amount": 3999,
     "currency": "nok",
     "date": "2025-12-29",
@@ -62,12 +75,13 @@ Return ONLY a valid JSON array of transactions in this exact format:
   }
 ]
 
-Important:
-- Amounts should be in major units (3999 for NOK 3,999.00, not 399900)
-- Currency codes should be lowercase (nok, usd, etc.)
-- Only include fields that are actually visible in the image
+VALIDATION REQUIREMENTS:
+- stripe_payment_id must start with "pi_" or "ch_" or similar Stripe prefix
+- stripe_payment_id must be at least 20 characters long
+- amount must be a positive number
+- currency must be a valid 3-letter code (nok, usd, eur, etc.)
 - Return an empty array [] if no transactions are found
-- Ensure all required fields (stripe_payment_id, amount, currency) are present for each transaction`,
+- If ANY required field (stripe_payment_id, amount, currency) is missing or unclear, exclude that transaction`,
             },
           ],
         },
@@ -111,14 +125,44 @@ Important:
       );
     }
 
-    // Validate transactions
+    // Validate and clean transactions
     const validTransactions = transactions.filter((t) => {
-      return (
-        t.stripe_payment_id &&
-        typeof t.amount === "number" &&
-        t.currency
-      );
-    });
+      // Required fields check
+      if (!t.stripe_payment_id || typeof t.amount !== "number" || !t.currency) {
+        return false;
+      }
+
+      // Payment ID validation
+      const paymentId = String(t.stripe_payment_id).trim();
+      if (!paymentId.startsWith("pi_") && !paymentId.startsWith("ch_")) {
+        console.warn(`Invalid payment ID format: ${paymentId}`);
+        return false;
+      }
+      if (paymentId.length < 20) {
+        console.warn(`Payment ID too short: ${paymentId}`);
+        return false;
+      }
+
+      // Amount validation
+      if (t.amount <= 0 || !isFinite(t.amount)) {
+        console.warn(`Invalid amount: ${t.amount}`);
+        return false;
+      }
+
+      // Currency validation
+      const currency = String(t.currency).toLowerCase().trim();
+      if (currency.length !== 3) {
+        console.warn(`Invalid currency: ${currency}`);
+        return false;
+      }
+
+      return true;
+    }).map((t) => ({
+      ...t,
+      stripe_payment_id: String(t.stripe_payment_id).trim(),
+      currency: String(t.currency).toLowerCase().trim(),
+      amount: Math.round(t.amount), // Ensure integer amounts
+    }));
 
     return NextResponse.json({
       success: true,
