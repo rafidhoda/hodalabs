@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
           if (parts[0]) {
             counterparty = parts[0].trim();
             // Remove common prefixes like "054011345..." (card numbers)
-            if (counterparty.match(/^\d{15,}/)) {
+            if (counterparty && counterparty.match(/^\d{15,}/)) {
               // This looks like a card number, try next part
               counterparty = parts[1]?.trim() || description.split(" ").slice(-2).join(" ") || null;
             }
