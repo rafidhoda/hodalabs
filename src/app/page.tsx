@@ -51,7 +51,19 @@ interface DashboardData {
 
 export default function Home() {
   const [user, setUser] = useState<any>(null);
-  const [year, setYear] = useState<number>(new Date().getFullYear());
+  // Initialize year from localStorage or default to current year
+  const [year, setYear] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const savedYear = localStorage.getItem("dashboardYear");
+      if (savedYear) {
+        const yearNum = parseInt(savedYear, 10);
+        if (yearNum === 2025 || yearNum === 2026) {
+          return yearNum;
+        }
+      }
+    }
+    return new Date().getFullYear();
+  });
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -210,7 +222,12 @@ export default function Home() {
           </h1>
           <div className="flex gap-2">
             <button
-              onClick={() => setYear(2025)}
+              onClick={() => {
+                setYear(2025);
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("dashboardYear", "2025");
+                }
+              }}
               disabled={loading}
               className={`rounded-lg px-4 py-2 font-medium transition-colors ${
                 year === 2025
@@ -221,7 +238,12 @@ export default function Home() {
               2025
             </button>
             <button
-              onClick={() => setYear(2026)}
+              onClick={() => {
+                setYear(2026);
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("dashboardYear", "2026");
+                }
+              }}
               disabled={loading}
               className={`rounded-lg px-4 py-2 font-medium transition-colors ${
                 year === 2026

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 interface Transaction {
   stripe_payment_id?: string;
@@ -18,14 +19,27 @@ interface Transaction {
 }
 
 interface CSVTransaction {
-  "PaymentIntent ID": string;
-  "Created date (UTC)": string;
-  Amount: string;
-  Currency: string;
+  // Stripe format
+  "PaymentIntent ID"?: string;
+  "Created date (UTC)"?: string;
+  Amount?: string;
+  Currency?: string;
   "Project Name"?: string;
   "Customer Email"?: string;
   Description?: string;
   Status?: string;
+  // Bank format
+  "Bokført dato"?: string;
+  "Forklarende tekst"?: string;
+  "Transaksjonstype"?: string;
+  Ut?: string; // Outgoing (expenses)
+  Inn?: string; // Incoming (income)
+  "Arkivref."?: string;
+  "Referanse"?: string;
+  // Common
+  csvFormat?: "stripe" | "bank";
+  category?: string;
+  project_id?: string;
 }
 
 type ImportMode = "screenshot" | "csv";
@@ -42,6 +56,12 @@ export default function ImportPage() {
   // CSV state
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvTransactions, setCsvTransactions] = useState<CSVTransaction[]>([]);
+  const [csvPage, setCsvPage] = useState(0);
+  const [csvSelected, setCsvSelected] = useState<Set<number>>(new Set());
+  const CSV_PAGE_SIZE = 20;
+  
+  // Projects state
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   
   // Shared state
   const [loading, setLoading] = useState(false);
@@ -49,6 +69,33 @@ export default function ImportPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
+
+  // Fetch projects on mount
+  useEffect(() => {
+    const fetchProjects = async () => {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (!supabaseUrl || !supabaseAnonKey) {
+        console.error("Supabase environment variables are missing");
+        return;
+      }
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data, error } = await supabase
+        .from("projects")
+        .select("id, name")
+        .order("name");
+
+      if (error) {
+        console.error("Error fetching projects:", error);
+      } else {
+        setProjects(data || []);
+      }
+    };
+
+    fetchProjects();
+  }, []);
 
   // ========== Screenshot Functions ==========
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -291,10 +338,80 @@ export default function ImportPage() {
     if (selectedFile) {
       setCsvFile(selectedFile);
       setCsvTransactions([]);
+      setCsvPage(0); // Reset to first page when new file is selected
+      setCsvSelected(new Set()); // Reset selections
       setError(null);
       setSuccess(false);
       setPreviewMode(false);
     }
+  };
+
+  // Helper to parse CSV line with delimiter (handles quoted fields)
+  const parseCSVLine = (line: string, delimiter: string): string[] => {
+    const values: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let j = 0; j < line.length; j++) {
+      const char = line[j];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === delimiter && !inQuotes) {
+        values.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    values.push(current.trim());
+    return values;
+  };
+
+  // Convert Norwegian date format (DD.MM.YYYY) to YYYY-MM-DD
+  const parseNorwegianDate = (dateStr: string): string => {
+    const parts = dateStr.split(".");
+    if (parts.length === 3) {
+      const day = parts[0].padStart(2, "0");
+      const month = parts[1].padStart(2, "0");
+      const year = parts[2];
+      return `${year}-${month}-${day}`;
+    }
+    throw new Error(`Invalid date format: ${dateStr}`);
+  };
+
+  // Convert Norwegian number format (1.582,50) to number string
+  const parseNorwegianNumber = (numStr: string): string => {
+    // Remove spaces, then replace comma with dot, then remove dots (thousands separators)
+    let cleaned = numStr.trim().replace(/\s/g, "");
+    // If there's a comma, it's the decimal separator
+    if (cleaned.includes(",")) {
+      // Replace dot with nothing (thousands separator) and comma with dot (decimal)
+      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+    }
+    return cleaned;
+  };
+
+  // Clean up bank transaction descriptions by removing long numeric prefixes
+  const cleanDescription = (description: string): string => {
+    if (!description) return "";
+    
+    let cleaned = description.trim();
+    
+    // Remove long numeric prefixes (typically 15+ digits) at the start
+    // Pattern: "054000775340100020991679053532 Usd 6,18 Name-Cheap.Com"
+    // Should become: "Name-Cheap.Com" or "Usd 6,18 Name-Cheap.Com"
+    
+    // Remove leading long numbers (15+ digits) followed by space
+    cleaned = cleaned.replace(/^\d{15,}\s+/g, "");
+    
+    // If description starts with currency code after cleaning, try to find the vendor name
+    // Pattern: "Usd 49,00 Restream, Inc." -> "Restream, Inc."
+    // But keep currency info if it's useful: "Usd 49,00 Restream, Inc." -> keep "Restream, Inc." (or maybe "Restream, Inc. (Usd 49,00)")
+    
+    // For now, just remove the leading long numbers - the rest is usually meaningful
+    // If it starts with currency code + amount, that's still useful context
+    
+    return cleaned.trim() || description; // Return original if we removed everything
   };
 
   const parseCSV = async (file: File): Promise<CSVTransaction[]> => {
@@ -310,74 +427,176 @@ export default function ImportPage() {
             return;
           }
 
-          const headers = lines[0].split(",").map((h) => h.trim());
-          const paymentIntentIdx = headers.findIndex(
-            (h) => h === "PaymentIntent ID"
-          );
-          const amountIdx = headers.findIndex((h) => h === "Amount");
-          const currencyIdx = headers.findIndex((h) => h === "Currency");
-          const dateIdx = headers.findIndex(
-            (h) => h === "Created date (UTC)" || h.includes("date")
-          );
+          // Detect delimiter: check first few lines for semicolons
+          const hasSemicolon = lines.some((line) => line.includes(";"));
+          const delimiter = hasSemicolon ? ";" : ",";
 
-          if (
-            paymentIntentIdx === -1 ||
-            amountIdx === -1 ||
-            currencyIdx === -1 ||
-            dateIdx === -1
-          ) {
-            reject(
-              new Error(
-                "CSV missing required columns: PaymentIntent ID, Amount, Currency, Created date (UTC)"
-              )
-            );
-            return;
+          // Find the header row (Norwegian bank CSVs have headers on line 4 or 5, not line 0)
+          let headerRowIndex = 0;
+          let headers: string[] = [];
+          let isBankFormat = false;
+
+          // Try to find the header row by looking for known bank CSV columns
+          // Check first 10 lines to find the header (Norwegian bank CSVs have headers around line 4-5)
+          for (let i = 0; i < Math.min(10, lines.length); i++) {
+            const testHeaders = parseCSVLine(lines[i], delimiter).map((h) => h.replace(/^"|"$/g, "").trim());
+            // Check for bank CSV columns (try both with and without Norwegian characters for encoding issues)
+            const hasBankColumns = testHeaders.some((h) => {
+              const hLower = h.toLowerCase();
+              return hLower.includes("bokf") && hLower.includes("dato") || // "Bokført dato"
+                     h === "Ut" || h.toLowerCase() === "ut" ||
+                     h === "Inn" || h.toLowerCase() === "inn" ||
+                     h.includes("Arkivref") || h.toLowerCase().includes("arkivref") ||
+                     (h.includes("Forklarende") && h.includes("tekst")) ||
+                     hLower.includes("forklarende");
+            });
+            if (hasBankColumns) {
+              headerRowIndex = i;
+              headers = testHeaders;
+              isBankFormat = true;
+              break;
+            }
+          }
+
+          // If we didn't find bank format, try Stripe format (first line)
+          if (!isBankFormat) {
+            headers = parseCSVLine(lines[0], delimiter).map((h) => h.replace(/^"|"$/g, "").trim());
+            headerRowIndex = 0;
           }
 
           const parsed: CSVTransaction[] = [];
-          for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
 
-            const values: string[] = [];
-            let current = "";
-            let inQuotes = false;
+          if (isBankFormat) {
+            // Bank CSV format - use flexible matching for encoding issues
+            const dateIdx = headers.findIndex((h) => 
+              h === "Bokført dato" || (h.toLowerCase().includes("bokf") && h.toLowerCase().includes("dato"))
+            );
+            const descriptionIdx = headers.findIndex((h) => 
+              h === "Forklarende tekst" || (h.toLowerCase().includes("forklarende") && h.toLowerCase().includes("tekst"))
+            );
+            const transactionTypeIdx = headers.findIndex((h) => 
+              h === "Transaksjonstype" || h.toLowerCase().includes("transaksjonstype")
+            );
+            const utIdx = headers.findIndex((h) => h === "Ut" || h.toLowerCase() === "ut");
+            const innIdx = headers.findIndex((h) => h === "Inn" || h.toLowerCase() === "inn");
+            const archiveRefIdx = headers.findIndex((h) => 
+              h === "Arkivref." || h.toLowerCase().includes("arkivref")
+            );
+            const referenceIdx = headers.findIndex((h) => 
+              h === "Referanse" || h.toLowerCase().includes("referanse")
+            );
 
-            for (let j = 0; j < line.length; j++) {
-              const char = line[j];
-              if (char === '"') {
-                inQuotes = !inQuotes;
-              } else if (char === "," && !inQuotes) {
-                values.push(current.trim());
-                current = "";
-              } else {
-                current += char;
-              }
+            if (dateIdx === -1 || (utIdx === -1 && innIdx === -1)) {
+              reject(
+                new Error(
+                  "Bank CSV missing required columns: Bokført dato, and either Ut or Inn"
+                )
+              );
+              return;
             }
-            values.push(current.trim());
 
-            if (values.length < headers.length) continue;
+            // Skip header rows - start after the header row we found
+            const startRow = headerRowIndex + 1;
 
-            const transaction: CSVTransaction = {
-              "PaymentIntent ID": values[paymentIntentIdx] || "",
-              "Created date (UTC)": values[dateIdx] || "",
-              Amount: values[amountIdx] || "",
-              Currency: values[currencyIdx] || "",
-              "Project Name": values[headers.findIndex((h) => h === "Project Name")] || "",
-              "Customer Email": values[headers.findIndex((h) => h === "Customer Email")] || "",
-              Description: values[headers.findIndex((h) => h === "Description")] || "",
-              Status: values[headers.findIndex((h) => h === "Status")] || "",
-            };
+            for (let i = startRow; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
 
-            if (
-              transaction["PaymentIntent ID"] &&
-              transaction.Amount &&
-              (!transaction.Status ||
-                transaction.Status.toLowerCase() === "paid" ||
-                transaction.Status.toLowerCase() === "succeeded")
-            ) {
+              const values = parseCSVLine(line, delimiter);
+              if (values.length < headers.length) continue;
+
+              const dateStr = values[dateIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const utStr = values[utIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const innStr = values[innIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const description = values[descriptionIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const transactionType = values[transactionTypeIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const archiveRef = values[archiveRefIdx]?.replace(/^"|"$/g, "").trim() || "";
+              const reference = values[referenceIdx]?.replace(/^"|"$/g, "").trim() || "";
+
+              // Skip if no date or no amount
+              if (!dateStr || (!utStr && !innStr)) continue;
+
+              // Determine if expense or income
+              const isExpense = !!utStr;
+              const amountStr = isExpense ? utStr : innStr;
+
+              // Skip if amount is empty
+              if (!amountStr || amountStr === "0" || amountStr === "0,00") continue;
+
+              // Store original date string (API expects original Norwegian format DD.MM.YYYY)
+              // The API will parse it - don't convert here
+
+              const transaction: CSVTransaction = {
+                "Bokført dato": dateStr,
+                "Forklarende tekst": description,
+                "Transaksjonstype": transactionType,
+                Ut: isExpense ? amountStr : undefined,
+                Inn: !isExpense ? amountStr : undefined,
+                "Arkivref.": archiveRef || undefined,
+                "Referanse": reference || undefined,
+                csvFormat: "bank",
+              };
+
               parsed.push(transaction);
             }
+          } else {
+            // Stripe CSV format
+            const paymentIntentIdx = headers.findIndex((h) => h === "PaymentIntent ID");
+            const amountIdx = headers.findIndex((h) => h === "Amount");
+            const currencyIdx = headers.findIndex((h) => h === "Currency");
+            const dateIdx = headers.findIndex(
+              (h) => h === "Created date (UTC)" || h.includes("date")
+            );
+
+            if (
+              paymentIntentIdx === -1 ||
+              amountIdx === -1 ||
+              currencyIdx === -1 ||
+              dateIdx === -1
+            ) {
+              reject(
+                new Error(
+                  "CSV missing required columns: PaymentIntent ID, Amount, Currency, Created date (UTC)"
+                )
+              );
+              return;
+            }
+
+            for (let i = 1; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
+
+              const values = parseCSVLine(line, delimiter);
+
+              if (values.length < headers.length) continue;
+
+              const transaction: CSVTransaction = {
+                "PaymentIntent ID": values[paymentIntentIdx]?.replace(/^"|"$/g, "").trim() || "",
+                "Created date (UTC)": values[dateIdx]?.replace(/^"|"$/g, "").trim() || "",
+                Amount: values[amountIdx]?.replace(/^"|"$/g, "").trim() || "",
+                Currency: values[currencyIdx]?.replace(/^"|"$/g, "").trim() || "",
+                "Project Name": values[headers.findIndex((h) => h === "Project Name")]?.replace(/^"|"$/g, "").trim() || "",
+                "Customer Email": values[headers.findIndex((h) => h === "Customer Email")]?.replace(/^"|"$/g, "").trim() || "",
+                Description: values[headers.findIndex((h) => h === "Description")]?.replace(/^"|"$/g, "").trim() || "",
+                Status: values[headers.findIndex((h) => h === "Status")]?.replace(/^"|"$/g, "").trim() || "",
+                csvFormat: "stripe",
+              };
+
+              if (
+                transaction["PaymentIntent ID"] &&
+                transaction.Amount &&
+                (!transaction.Status ||
+                  transaction.Status.toLowerCase() === "paid" ||
+                  transaction.Status.toLowerCase() === "succeeded")
+              ) {
+                parsed.push(transaction);
+              }
+            }
+          }
+
+          if (parsed.length === 0) {
+            reject(new Error("No valid transactions found in CSV file"));
+            return;
           }
 
           resolve(parsed);
@@ -400,6 +619,8 @@ export default function ImportPage() {
     try {
       const parsed = await parseCSV(csvFile);
       setCsvTransactions(parsed);
+      // Select all transactions by default
+      setCsvSelected(new Set(parsed.map((_, i) => i)));
       setPreviewMode(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse CSV");
@@ -416,17 +637,29 @@ export default function ImportPage() {
   const handleConfirmCSV = async () => {
     if (csvTransactions.length === 0) return;
 
+    // Filter to only selected transactions
+    const selectedTransactions = csvTransactions.filter((_, index) => csvSelected.has(index));
+    
+    if (selectedTransactions.length === 0) {
+      setError("Please select at least one transaction to import");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setImportResult(null);
 
     try {
-      const response = await fetch("/api/import-stripe-csv", {
+      // Determine which API endpoint to use based on CSV format
+      const isBankFormat = selectedTransactions[0]?.csvFormat === "bank";
+      const endpoint = isBankFormat ? "/api/import-bank-csv" : "/api/import-stripe-csv";
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ transactions: csvTransactions }),
+        body: JSON.stringify({ transactions: selectedTransactions }),
       });
 
       const data = await response.json();
@@ -448,6 +681,7 @@ export default function ImportPage() {
       }
 
       setCsvTransactions([]);
+      setCsvSelected(new Set());
       setCsvFile(null);
       setPreviewMode(false);
       const fileInput = document.getElementById("csv-input") as HTMLInputElement;
@@ -487,7 +721,7 @@ export default function ImportPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <div className="mx-auto max-w-6xl px-4 py-8">
+      <div className="mx-auto max-w-7xl px-4 py-8">
         <h1 className="mb-8 text-4xl font-bold tracking-tight text-black dark:text-zinc-50">
           Import Transactions
         </h1>
@@ -801,10 +1035,10 @@ export default function ImportPage() {
                 </h2>
                 <button
                   onClick={handleConfirmCSV}
-                  disabled={saving}
+                  disabled={saving || csvSelected.size === 0}
                   className="rounded-lg bg-green-600 px-6 py-2 text-white font-medium transition-colors hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {saving ? "Importing..." : `Import ${csvTransactions.length} Transactions`}
+                  {saving ? "Importing..." : `Import ${csvSelected.size} Selected Transaction${csvSelected.size !== 1 ? "s" : ""}`}
                 </button>
               </div>
 
@@ -812,49 +1046,315 @@ export default function ImportPage() {
                 <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                   <thead className="bg-gray-50 dark:bg-gray-800">
                     <tr>
+                      <th className="w-12 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={csvTransactions.length > 0 && csvSelected.size === csvTransactions.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              // Select all
+                              setCsvSelected(new Set(csvTransactions.map((_, i) => i)));
+                            } else {
+                              // Deselect all
+                              setCsvSelected(new Set());
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                        />
+                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
                         Date
                       </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Payment ID
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Amount
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Project
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Customer
-                      </th>
+                      {csvTransactions[0]?.csvFormat === "bank" ? (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Type
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Description
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Amount (NOK)
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Category
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Project
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Archive Ref
+                          </th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Payment ID
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Amount
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Category
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Project
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Customer
+                          </th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
-                    {csvTransactions.slice(0, 20).map((transaction, index) => (
-                      <tr key={index}>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          {formatDate(transaction["Created date (UTC)"])}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          {transaction["PaymentIntent ID"]}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          {formatCsvAmount(transaction.Amount, transaction.Currency)}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                          {transaction["Project Name"] || "(No project)"}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                          {transaction["Customer Email"] || "-"}
-                        </td>
-                      </tr>
-                    ))}
+                    {csvTransactions.slice(csvPage * CSV_PAGE_SIZE, (csvPage + 1) * CSV_PAGE_SIZE).map((transaction, index) => {
+                      const actualIndex = csvPage * CSV_PAGE_SIZE + index;
+                      if (transaction.csvFormat === "bank") {
+                        const isExpense = !!transaction.Ut;
+                        const amountStr = isExpense ? transaction.Ut : transaction.Inn;
+                        const amount = parseFloat(parseNorwegianNumber(amountStr || "0"));
+                        
+                        // Auto-detect salary category
+                        const description = transaction["Forklarende tekst"] || "";
+                        const descriptionLower = description.toLowerCase();
+                        const autoDetectedSalary = descriptionLower.includes("rafid hoda") || 
+                                                  descriptionLower.includes("rafid") ||
+                                                  (transaction["Transaksjonstype"] === "Overføring innland" && descriptionLower.includes("rafid"));
+                        const currentCategory = transaction.category || (autoDetectedSalary ? "salary" : undefined);
+                        
+                        return (
+                          <tr key={index}>
+                            <td className="w-12 px-4 py-3">
+                              <input
+                                type="checkbox"
+                                checked={csvSelected.has(actualIndex)}
+                                onChange={(e) => {
+                                  const newSelected = new Set(csvSelected);
+                                  if (e.target.checked) {
+                                    newSelected.add(actualIndex);
+                                  } else {
+                                    newSelected.delete(actualIndex);
+                                  }
+                                  setCsvSelected(newSelected);
+                                }}
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                              />
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                              {transaction["Bokført dato"] || "-"}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                isExpense 
+                                  ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300" 
+                                  : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                              }`}>
+                                {isExpense ? "Expense" : "Income"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-900 dark:text-zinc-50 max-w-md" title={transaction["Forklarende tekst"] || ""}>
+                              <div className="truncate">
+                                {cleanDescription(transaction["Forklarende tekst"] || "") || "-"}
+                              </div>
+                            </td>
+                            <td className={`whitespace-nowrap px-4 py-3 text-sm text-right font-medium ${
+                              isExpense 
+                                ? "text-red-600 dark:text-red-400" 
+                                : "text-green-600 dark:text-green-400"
+                            }`}>
+                              {isExpense ? "-" : "+"} {amount.toLocaleString("no-NO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm">
+                              <select
+                                value={currentCategory || ""}
+                                onChange={(e) => {
+                                  const updated = [...csvTransactions];
+                                  updated[actualIndex].category = e.target.value || undefined;
+                                  setCsvTransactions(updated);
+                                }}
+                                className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-zinc-50"
+                              >
+                                <option value="">—</option>
+                                <option value="salary">Salary</option>
+                                <option value="software">Software</option>
+                                <option value="utilities">Utilities</option>
+                                <option value="office">Office</option>
+                                <option value="travel">Travel</option>
+                                <option value="marketing">Marketing</option>
+                                <option value="professional">Professional Services</option>
+                                <option value="equipment">Equipment</option>
+                                <option value="other">Other</option>
+                              </select>
+                            </td>
+                            <td className="px-4 py-3 text-sm min-w-[180px]">
+                              {isExpense ? (
+                                <select
+                                  value={transaction.project_id || ""}
+                                  onChange={(e) => {
+                                    const updated = [...csvTransactions];
+                                    updated[actualIndex].project_id = e.target.value || undefined;
+                                    setCsvTransactions(updated);
+                                  }}
+                                  className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-zinc-50"
+                                >
+                                  <option value="">—</option>
+                                  {projects.map((project) => (
+                                    <option key={project.id} value={project.id}>
+                                      {project.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-gray-400 text-xs">—</span>
+                              )}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                              {transaction["Arkivref."] || transaction["Referanse"] || "-"}
+                            </td>
+                          </tr>
+                        );
+                      } else {
+                        return (
+                          <tr key={index}>
+                            <td className="w-12 px-4 py-3">
+                              <input
+                                type="checkbox"
+                                checked={csvSelected.has(actualIndex)}
+                                onChange={(e) => {
+                                  const newSelected = new Set(csvSelected);
+                                  if (e.target.checked) {
+                                    newSelected.add(actualIndex);
+                                  } else {
+                                    newSelected.delete(actualIndex);
+                                  }
+                                  setCsvSelected(newSelected);
+                                }}
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                              />
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                              {formatDate(transaction["Created date (UTC)"] || "")}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                              {transaction["PaymentIntent ID"] || "-"}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                              {formatCsvAmount(transaction.Amount || "", transaction.Currency || "USD")}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm">
+                              <select
+                                value={transaction.category || ""}
+                                onChange={(e) => {
+                                  const updated = [...csvTransactions];
+                                  updated[actualIndex].category = e.target.value || undefined;
+                                  setCsvTransactions(updated);
+                                }}
+                                className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-zinc-50"
+                              >
+                                <option value="">—</option>
+                                <option value="salary">Salary</option>
+                                <option value="software">Software</option>
+                                <option value="utilities">Utilities</option>
+                                <option value="office">Office</option>
+                                <option value="travel">Travel</option>
+                                <option value="marketing">Marketing</option>
+                                <option value="professional">Professional Services</option>
+                                <option value="equipment">Equipment</option>
+                                <option value="other">Other</option>
+                              </select>
+                            </td>
+                            <td className="px-4 py-3 text-sm min-w-[180px]">
+                              <select
+                                value={transaction.project_id || transaction["Project Name"] || ""}
+                                onChange={(e) => {
+                                  const updated = [...csvTransactions];
+                                  // If it's a project ID (UUID format), use it directly
+                                  // Otherwise, it's a project name that will be resolved server-side
+                                  if (e.target.value && projects.find(p => p.id === e.target.value)) {
+                                    updated[actualIndex].project_id = e.target.value;
+                                    delete updated[actualIndex]["Project Name"];
+                                  } else {
+                                    updated[actualIndex]["Project Name"] = e.target.value;
+                                    delete updated[actualIndex].project_id;
+                                  }
+                                  setCsvTransactions(updated);
+                                }}
+                                className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-zinc-50"
+                              >
+                                <option value="">—</option>
+                                {projects.map((project) => (
+                                  <option key={project.id} value={project.id}>
+                                    {project.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                              {transaction["Customer Email"] || "-"}
+                            </td>
+                          </tr>
+                        );
+                      }
+                    })}
                   </tbody>
                 </table>
-                {csvTransactions.length > 20 && (
-                  <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 px-4">
-                    Showing first 20 of {csvTransactions.length} transactions
-                  </p>
+                
+                {/* Pagination Controls */}
+                {csvTransactions.length > CSV_PAGE_SIZE && (
+                  <div className="mt-4 flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                      Showing {csvPage * CSV_PAGE_SIZE + 1} to {Math.min((csvPage + 1) * CSV_PAGE_SIZE, csvTransactions.length)} of {csvTransactions.length} transactions
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCsvPage(Math.max(0, csvPage - 1))}
+                        disabled={csvPage === 0}
+                        className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        Previous
+                      </button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.ceil(csvTransactions.length / CSV_PAGE_SIZE) }, (_, i) => {
+                          const totalPages = Math.ceil(csvTransactions.length / CSV_PAGE_SIZE);
+                          // Show first page, last page, current page, and pages around current
+                          if (
+                            i === 0 ||
+                            i === totalPages - 1 ||
+                            (i >= csvPage - 1 && i <= csvPage + 1)
+                          ) {
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => setCsvPage(i)}
+                                className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                  csvPage === i
+                                    ? "border-blue-600 bg-blue-600 text-white"
+                                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                                }`}
+                              >
+                                {i + 1}
+                              </button>
+                            );
+                          } else if (i === csvPage - 2 || i === csvPage + 2) {
+                            return (
+                              <span key={i} className="px-2 text-gray-500 dark:text-gray-400">
+                                ...
+                              </span>
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
+                      <button
+                        onClick={() => setCsvPage(Math.min(Math.ceil(csvTransactions.length / CSV_PAGE_SIZE) - 1, csvPage + 1))}
+                        disabled={csvPage >= Math.ceil(csvTransactions.length / CSV_PAGE_SIZE) - 1}
+                        className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

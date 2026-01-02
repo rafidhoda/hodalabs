@@ -111,9 +111,10 @@ export async function POST(request: NextRequest) {
           transaction_date: transactionDate,
           source_type: "stripe",
           source_reference: csvTxn["PaymentIntent ID"].trim(),
-          project_id: projectId,
+          project_id: (csvTxn as any).project_id || projectId,
           customer_email: csvTxn["Customer Email"]?.trim() || null,
           description: csvTxn.Description?.trim() || null,
+          category: (csvTxn as any).category || null,
         });
       } catch (err) {
         errors.push(
