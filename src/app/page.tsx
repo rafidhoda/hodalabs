@@ -89,12 +89,16 @@ export default function Home() {
           const response = await fetch("/api/check-auth");
           const data = await response.json();
           
+          console.log(`[AUTH PAGE] Check result:`, data);
+          
           if (data.whitelistConfigured && !data.allowed) {
             // User is not whitelisted, sign them out
-            console.log(`[AUTH] User ${data.email} is not whitelisted, signing out`);
+            console.log(`[AUTH PAGE] User ${data.email} is not whitelisted, signing out`);
             await supabase.auth.signOut();
             window.location.href = "/?error=unauthorized";
             return;
+          } else if (!data.whitelistConfigured) {
+            console.warn(`[AUTH PAGE] WARNING: No whitelist configured! All users are allowed. Set ALLOWED_EMAILS environment variable to enable access control.`);
           }
         } catch (error) {
           console.error("[AUTH] Error checking authorization:", error);
@@ -111,12 +115,16 @@ export default function Home() {
           const response = await fetch("/api/check-auth");
           const data = await response.json();
           
+          console.log(`[AUTH PAGE] Check result:`, data);
+          
           if (data.whitelistConfigured && !data.allowed) {
             // User is not whitelisted, sign them out
-            console.log(`[AUTH] User ${data.email} is not whitelisted, signing out`);
+            console.log(`[AUTH PAGE] User ${data.email} is not whitelisted, signing out`);
             await supabase.auth.signOut();
             window.location.href = "/?error=unauthorized";
             return;
+          } else if (!data.whitelistConfigured) {
+            console.warn(`[AUTH PAGE] WARNING: No whitelist configured! All users are allowed. Set ALLOWED_EMAILS environment variable to enable access control.`);
           }
         } catch (error) {
           console.error("[AUTH] Error checking authorization:", error);

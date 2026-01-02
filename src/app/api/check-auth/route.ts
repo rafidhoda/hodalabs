@@ -36,6 +36,11 @@ export async function GET(request: NextRequest) {
     // Option 1: Environment variable (comma-separated emails) - takes priority
     const allowedEmailsEnv = process.env.ALLOWED_EMAILS?.split(",").map(e => e.trim().toLowerCase()).filter(e => e.length > 0) || [];
     
+    console.log(`[AUTH CHECK] User: ${user.email}`);
+    console.log(`[AUTH CHECK] ALLOWED_EMAILS env var: ${process.env.ALLOWED_EMAILS ? `SET (${process.env.ALLOWED_EMAILS})` : 'NOT SET'}`);
+    console.log(`[AUTH CHECK] Parsed allowed emails: ${JSON.stringify(allowedEmailsEnv)}`);
+    console.log(`[AUTH CHECK] USE_ALLOWED_USERS_TABLE: ${process.env.USE_ALLOWED_USERS_TABLE}`);
+    
     let isAllowed = false;
     let whitelistConfigured = false;
     
@@ -44,6 +49,7 @@ export async function GET(request: NextRequest) {
       whitelistConfigured = true;
       const userEmail = user.email.toLowerCase();
       isAllowed = allowedEmailsEnv.includes(userEmail);
+      console.log(`[AUTH CHECK] Email ${userEmail} ${isAllowed ? 'IS' : 'IS NOT'} in env whitelist`);
     } else if (process.env.USE_ALLOWED_USERS_TABLE === "true") {
       // Check Supabase table (optional - only if env var not set and flag is enabled)
       whitelistConfigured = true;
@@ -54,17 +60,21 @@ export async function GET(request: NextRequest) {
         .single();
       
       if (checkError && checkError.code !== "PGRST116") { // PGRST116 = no rows found
-        console.error("[AUTH] Error checking allowed_users table:", checkError);
+        console.error("[AUTH CHECK] Error checking allowed_users table:", checkError);
         // If table doesn't exist or error, deny access for safety
         isAllowed = false;
       } else {
         isAllowed = !!allowedUser;
       }
+      console.log(`[AUTH CHECK] Email ${user.email} ${isAllowed ? 'IS' : 'IS NOT'} in allowed_users table`);
     } else {
       // No whitelist configured - allow all authenticated users (development mode)
+      console.log("[AUTH CHECK] No whitelist configured - allowing all authenticated users (development mode)");
       isAllowed = true;
       whitelistConfigured = false;
     }
+    
+    console.log(`[AUTH CHECK] Final decision: allowed=${isAllowed}, whitelistConfigured=${whitelistConfigured}`);
     
     return NextResponse.json({
       allowed: isAllowed,
