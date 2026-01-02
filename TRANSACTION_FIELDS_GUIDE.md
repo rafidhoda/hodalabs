@@ -51,3 +51,4 @@
 3. **Bank**: Always store `counterparty` (name), `archive_reference` (unique ID)
 4. **Matching**: Use `customer_email` for Stripe, `archive_reference` for bank statements
 
+

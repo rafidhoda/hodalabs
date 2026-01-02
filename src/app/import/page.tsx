@@ -53,6 +53,7 @@ export default function ImportPage() {
   // ========== Screenshot Functions ==========
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
+    console.log("File selected:", selectedFile?.name, selectedFile?.size);
     if (selectedFile) {
       setFile(selectedFile);
       setPreview(URL.createObjectURL(selectedFile));
@@ -60,6 +61,8 @@ export default function ImportPage() {
       setError(null);
       setSuccess(false);
       setPreviewMode(false);
+    } else {
+      console.warn("No file selected");
     }
   };
 
@@ -77,15 +80,24 @@ export default function ImportPage() {
   };
 
   const processScreenshot = async () => {
-    if (!file) return;
+    if (!file) {
+      setError("Please select a file first");
+      return;
+    }
 
+    console.log("Starting screenshot processing...", { file: file.name, size: file.size });
     setLoading(true);
     setError(null);
     setSuccess(false);
+    setTransactions([]);
+    setPreviewMode(false);
 
     try {
+      console.log("Converting file to base64...");
       const base64 = await fileToBase64(file);
+      console.log("Base64 conversion complete, length:", base64.length);
 
+      console.log("Sending request to /api/process-screenshot...");
       const response = await fetch("/api/process-screenshot", {
         method: "POST",
         headers: {
@@ -98,13 +110,16 @@ export default function ImportPage() {
         }),
       });
 
+      console.log("Response status:", response.status);
       const data = await response.json();
+      console.log("Response data:", data);
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to process screenshot");
       }
 
       const extractedTransactions = data.transactions || [];
+      console.log("Extracted transactions:", extractedTransactions.length);
 
       // Check which transactions already exist
       if (extractedTransactions.length > 0) {
@@ -159,7 +174,10 @@ export default function ImportPage() {
         setPreviewMode(true);
       }
     } catch (err) {
+      console.error("Error processing screenshot:", err);
       setError(err instanceof Error ? err.message : "Failed to process screenshot");
+      setTransactions([]);
+      setPreviewMode(false);
     } finally {
       setLoading(false);
     }
@@ -557,8 +575,12 @@ export default function ImportPage() {
 
             {file && (
               <button
-                onClick={processScreenshot}
-                disabled={loading}
+                onClick={(e) => {
+                  e.preventDefault();
+                  console.log("Extract Transactions button clicked", { file: file.name, loading });
+                  processScreenshot();
+                }}
+                disabled={loading || !file}
                 className="mt-4 rounded-lg bg-blue-600 px-6 py-3 text-white font-medium transition-colors hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? "Processing..." : "Extract Transactions"}

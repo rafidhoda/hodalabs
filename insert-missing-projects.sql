@@ -6,3 +6,4 @@ INSERT INTO projects (name, description, status) VALUES
   ('App Development', NULL, 'active')
 ON CONFLICT DO NOTHING;
 
+

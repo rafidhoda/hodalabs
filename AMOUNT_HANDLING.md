@@ -52,3 +52,4 @@ When showing amounts to users, always divide by 100:
 | Screenshots | Major units (3999) | 399900 (convert ×100) | 3999 NOK |
 | Manual Entry | Major units (3999) | 399900 (convert ×100) | 3999 NOK |
 
+
