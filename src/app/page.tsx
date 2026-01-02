@@ -87,15 +87,25 @@ export default function Home() {
       setLoading(true);
       try {
         const response = await fetch(`/api/dashboard?year=${year}`);
-        const data = await response.json();
-
+        
         if (!response.ok) {
-          throw new Error(data.error || "Failed to fetch dashboard data");
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || "Failed to fetch dashboard data");
         }
 
-        setDashboardData(data);
+        const data = await response.json();
+        
+        // Only update dashboardData if we got valid data
+        if (data && data.summary) {
+          setDashboardData(data);
+        } else {
+          console.error("Invalid data received from API:", data);
+          // Keep previous data if new data is invalid
+        }
       } catch (error) {
         console.error("Error fetching dashboard:", error);
+        // Don't clear dashboardData on error - keep showing previous data
+        // This prevents the flash of 0s
       } finally {
         setLoading(false);
       }
@@ -174,7 +184,8 @@ export default function Home() {
     );
   }
 
-  if (loading) {
+  // Show full loading screen only on initial load (no dashboardData yet)
+  if (loading && !dashboardData) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
         <div className="text-zinc-600 dark:text-zinc-400">Loading dashboard...</div>
@@ -183,7 +194,15 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
+    <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black relative">
+      {/* Loading overlay - shows on top of existing data when switching years */}
+      {loading && dashboardData && (
+        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm z-10 flex items-center justify-center">
+          <div className="rounded-lg bg-white dark:bg-gray-800 px-6 py-4 shadow-lg">
+            <div className="text-zinc-600 dark:text-zinc-400">Loading...</div>
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-8 flex items-center justify-between">
           <h1 className="text-4xl font-bold tracking-tight text-black dark:text-zinc-50">
@@ -192,21 +211,23 @@ export default function Home() {
           <div className="flex gap-2">
             <button
               onClick={() => setYear(2025)}
+              disabled={loading}
               className={`rounded-lg px-4 py-2 font-medium transition-colors ${
                 year === 2025
                   ? "bg-blue-600 text-white"
                   : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              }`}
+              } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               2025
             </button>
             <button
               onClick={() => setYear(2026)}
+              disabled={loading}
               className={`rounded-lg px-4 py-2 font-medium transition-colors ${
                 year === 2026
                   ? "bg-blue-600 text-white"
                   : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              }`}
+              } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               2026
             </button>
