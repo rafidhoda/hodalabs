@@ -4,12 +4,41 @@ This application supports restricting access to only specific Google accounts. Y
 
 ## Option 1: Environment Variables (Recommended - Simpler)
 
+### Local Development
+
 Add this to your `.env.local` file:
 
 ```bash
 # Comma-separated list of allowed email addresses
 ALLOWED_EMAILS=your-email@gmail.com,another-email@gmail.com,third-email@gmail.com
 ```
+
+### Production Deployment
+
+**⚠️ IMPORTANT: You MUST also set this environment variable in your deployment platform!**
+
+The environment variable in `.env.local` only works locally. For production, you need to set it in your deployment platform:
+
+#### Vercel
+1. Go to your project in [Vercel Dashboard](https://vercel.com/dashboard)
+2. Click on your project → **Settings** → **Environment Variables**
+3. Add a new variable:
+   - **Name:** `ALLOWED_EMAILS`
+   - **Value:** `your-email@gmail.com,another-email@gmail.com`
+   - **Environment:** Production (and optionally Preview/Development)
+4. **Redeploy** your application (or push a new commit to trigger a new deployment)
+
+#### Netlify
+1. Go to your site in [Netlify Dashboard](https://app.netlify.com/)
+2. Click **Site configuration** → **Environment variables**
+3. Click **Add a variable**
+4. Add:
+   - **Key:** `ALLOWED_EMAILS`
+   - **Value:** `your-email@gmail.com,another-email@gmail.com`
+5. **Redeploy** your site
+
+#### Other Platforms
+Set the `ALLOWED_EMAILS` environment variable in your platform's environment variable settings, then redeploy.
 
 **Pros:**
 - Simple to set up
