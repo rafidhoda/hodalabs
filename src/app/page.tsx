@@ -3,6 +3,16 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { SignInButton } from "@/components/SignInButton";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 interface DashboardData {
   year: number;
@@ -105,6 +115,48 @@ export default function Home() {
     const [year, month] = monthStr.split("-");
     const date = new Date(parseInt(year), parseInt(month) - 1);
     return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  };
+
+  // Prepare chart data: convert all currencies to NOK and aggregate by month
+  const prepareChartData = () => {
+    if (!dashboardData) return [];
+    
+    const exchangeRate = dashboardData.summary.exchangeRate || 10.5;
+    const monthMap: Record<string, { income: number; expenses: number; profit: number }> = {};
+
+    dashboardData.monthlyBreakdown.forEach((month) => {
+      if (!monthMap[month.month]) {
+        monthMap[month.month] = { income: 0, expenses: 0, profit: 0 };
+      }
+
+      month.currencies.forEach((currencyData) => {
+        // Convert to NOK
+        const incomeNOK = currencyData.currency === "USD" 
+          ? currencyData.income * exchangeRate 
+          : currencyData.income;
+        const expensesNOK = currencyData.currency === "USD"
+          ? currencyData.expenses * exchangeRate
+          : currencyData.expenses;
+        const profitNOK = currencyData.currency === "USD"
+          ? currencyData.profit * exchangeRate
+          : currencyData.profit;
+
+        monthMap[month.month].income += incomeNOK;
+        monthMap[month.month].expenses += expensesNOK;
+        monthMap[month.month].profit += profitNOK;
+      });
+    });
+
+    // Convert to array and sort by month
+    return Object.entries(monthMap)
+      .map(([month, data]) => ({
+        month: formatMonth(month),
+        monthKey: month, // For sorting
+        income: Math.round(data.income * 100) / 100,
+        expenses: Math.round(data.expenses * 100) / 100,
+        profit: Math.round(data.profit * 100) / 100,
+      }))
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   };
 
   if (!user) {
@@ -298,6 +350,73 @@ export default function Home() {
                   <h2 className="mb-4 text-xl font-semibold text-black dark:text-zinc-50">
                     Monthly Breakdown
                   </h2>
+                  
+                  {/* Chart */}
+                  <div className="mb-6 h-80 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={prepareChartData()}>
+                        <CartesianGrid 
+                          strokeDasharray="3 3" 
+                          stroke="currentColor" 
+                          className="opacity-30"
+                        />
+                        <XAxis 
+                          dataKey="month" 
+                          tick={{ fill: 'currentColor', fontSize: 12 }}
+                          className="text-gray-600 dark:text-gray-400"
+                        />
+                        <YAxis 
+                          tick={{ fill: 'currentColor', fontSize: 12 }}
+                          className="text-gray-600 dark:text-gray-400"
+                          tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                        />
+                        <Tooltip 
+                          contentStyle={{
+                            backgroundColor: 'var(--tooltip-bg, rgba(255, 255, 255, 0.95))',
+                            border: '1px solid var(--tooltip-border, #e5e7eb)',
+                            borderRadius: '8px',
+                            color: 'var(--tooltip-text, #000)',
+                          }}
+                          formatter={(value: number | undefined) => 
+                            value !== undefined ? formatCurrency(value, "NOK") : ""
+                          }
+                          labelStyle={{ color: 'currentColor' }}
+                        />
+                        <Legend 
+                          wrapperStyle={{ color: 'currentColor' }}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="income" 
+                          stroke="#22c55e" 
+                          strokeWidth={2}
+                          dot={{ r: 4, fill: "#22c55e" }}
+                          activeDot={{ r: 6 }}
+                          name="Income"
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="expenses" 
+                          stroke="#ef4444" 
+                          strokeWidth={2}
+                          dot={{ r: 4, fill: "#ef4444" }}
+                          activeDot={{ r: 6 }}
+                          name="Expenses"
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="profit" 
+                          stroke="#3b82f6" 
+                          strokeWidth={2}
+                          dot={{ r: 4, fill: "#3b82f6" }}
+                          activeDot={{ r: 6 }}
+                          name="Profit"
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Table */}
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                       <thead className="bg-gray-50 dark:bg-gray-800">
