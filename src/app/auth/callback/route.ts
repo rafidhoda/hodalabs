@@ -7,6 +7,8 @@ export async function GET(request: NextRequest) {
   const code = requestUrl.searchParams.get("code");
   const origin = requestUrl.origin;
 
+  console.error("[AUTH CALLBACK] Route hit. Code present:", !!code);
+  
   if (code) {
     const cookieStore = await cookies();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -50,10 +52,10 @@ export async function GET(request: NextRequest) {
     // Option 1: Environment variable (comma-separated emails) - takes priority
     const allowedEmailsEnv = process.env.ALLOWED_EMAILS?.split(",").map(e => e.trim().toLowerCase()).filter(e => e.length > 0) || [];
     
-    console.log(`[AUTH] Checking email whitelist for: ${user.email}`);
-    console.log(`[AUTH] ALLOWED_EMAILS env var: ${process.env.ALLOWED_EMAILS ? `SET (${process.env.ALLOWED_EMAILS})` : 'NOT SET'}`);
-    console.log(`[AUTH] Parsed allowed emails: ${JSON.stringify(allowedEmailsEnv)}`);
-    console.log(`[AUTH] USE_ALLOWED_USERS_TABLE: ${process.env.USE_ALLOWED_USERS_TABLE}`);
+    console.error(`[AUTH CALLBACK] Checking email whitelist for: ${user.email}`);
+    console.error(`[AUTH CALLBACK] ALLOWED_EMAILS env var: ${process.env.ALLOWED_EMAILS ? `SET (${process.env.ALLOWED_EMAILS})` : 'NOT SET'}`);
+    console.error(`[AUTH CALLBACK] Parsed allowed emails: ${JSON.stringify(allowedEmailsEnv)}`);
+    console.error(`[AUTH CALLBACK] USE_ALLOWED_USERS_TABLE: ${process.env.USE_ALLOWED_USERS_TABLE}`);
     
     // Option 2: Supabase table (if ALLOWED_EMAILS is not set, check database)
     let isAllowed = false;
@@ -64,7 +66,7 @@ export async function GET(request: NextRequest) {
       whitelistConfigured = true;
       const userEmail = user.email.toLowerCase();
       isAllowed = allowedEmailsEnv.includes(userEmail);
-      console.log(`[AUTH] Email ${userEmail} ${isAllowed ? 'IS' : 'IS NOT'} in env whitelist`);
+      console.error(`[AUTH CALLBACK] Email ${userEmail} ${isAllowed ? 'IS' : 'IS NOT'} in env whitelist`);
     } else if (process.env.USE_ALLOWED_USERS_TABLE === "true") {
       // Check Supabase table (optional - only if env var not set and flag is enabled)
       whitelistConfigured = true;
@@ -91,13 +93,13 @@ export async function GET(request: NextRequest) {
     
     // If whitelist is configured and user is not allowed, deny access
     if (whitelistConfigured && !isAllowed) {
-      console.log(`[AUTH] Access DENIED for email: ${user.email}`);
+      console.error(`[AUTH CALLBACK] ❌ Access DENIED for email: ${user.email}`);
       await supabase.auth.signOut();
       return NextResponse.redirect(new URL("/?error=unauthorized", origin));
     }
     
     if (whitelistConfigured && isAllowed) {
-      console.log(`[AUTH] Access GRANTED for email: ${user.email}`);
+      console.error(`[AUTH CALLBACK] ✅ Access GRANTED for email: ${user.email}`);
     }
   }
 
