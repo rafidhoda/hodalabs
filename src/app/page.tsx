@@ -184,12 +184,28 @@ export default function Home() {
   };
 
   if (!user) {
+    const errorParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("error") : null;
+    let errorMessage = null;
+    
+    if (errorParam === "unauthorized") {
+      errorMessage = "Access denied. Your email is not authorized to access this application.";
+    } else if (errorParam === "noemail") {
+      errorMessage = "Unable to retrieve email from Google account.";
+    } else if (errorParam === "auth") {
+      errorMessage = "Authentication failed. Please try again.";
+    }
+    
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
         <main className="flex flex-col items-center gap-8 text-center">
           <h1 className="text-5xl font-bold tracking-tight text-black dark:text-zinc-50">
             Hoda Labs
           </h1>
+          {errorMessage && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-6 py-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+              {errorMessage}
+            </div>
+          )}
           <SignInButton />
         </main>
       </div>
