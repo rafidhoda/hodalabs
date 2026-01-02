@@ -3,17 +3,13 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export async function GET(request: NextRequest) {
-  const requestUrl = new URL(request.url);
-  const code = requestUrl.searchParams.get("code");
-  const origin = requestUrl.origin;
-
-  if (code) {
+  try {
     const cookieStore = await cookies();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      return NextResponse.redirect(new URL("/?error=config", origin));
+      return NextResponse.json({ error: "Configuration error" }, { status: 500 });
     }
 
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
@@ -30,32 +26,16 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
     
-    if (error) {
-      console.error("Error exchanging code for session:", error);
-      return NextResponse.redirect(new URL("/?error=auth", origin));
-    }
-
-    // Check if email is whitelisted
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user || !user.email) {
-      console.error("No user or email after authentication");
-      await supabase.auth.signOut();
-      return NextResponse.redirect(new URL("/?error=noemail", origin));
+    if (userError || !user || !user.email) {
+      return NextResponse.json({ allowed: false, reason: "not_authenticated" });
     }
 
     // Check if email is whitelisted
     // Option 1: Environment variable (comma-separated emails) - takes priority
     const allowedEmailsEnv = process.env.ALLOWED_EMAILS?.split(",").map(e => e.trim().toLowerCase()).filter(e => e.length > 0) || [];
     
-    console.log(`[AUTH] Checking email whitelist for: ${user.email}`);
-    console.log(`[AUTH] ALLOWED_EMAILS env var: ${process.env.ALLOWED_EMAILS ? `SET (${process.env.ALLOWED_EMAILS})` : 'NOT SET'}`);
-    console.log(`[AUTH] Parsed allowed emails: ${JSON.stringify(allowedEmailsEnv)}`);
-    console.log(`[AUTH] USE_ALLOWED_USERS_TABLE: ${process.env.USE_ALLOWED_USERS_TABLE}`);
-    
-    // Option 2: Supabase table (if ALLOWED_EMAILS is not set, check database)
     let isAllowed = false;
     let whitelistConfigured = false;
     
@@ -64,7 +44,6 @@ export async function GET(request: NextRequest) {
       whitelistConfigured = true;
       const userEmail = user.email.toLowerCase();
       isAllowed = allowedEmailsEnv.includes(userEmail);
-      console.log(`[AUTH] Email ${userEmail} ${isAllowed ? 'IS' : 'IS NOT'} in env whitelist`);
     } else if (process.env.USE_ALLOWED_USERS_TABLE === "true") {
       // Check Supabase table (optional - only if env var not set and flag is enabled)
       whitelistConfigured = true;
@@ -81,28 +60,20 @@ export async function GET(request: NextRequest) {
       } else {
         isAllowed = !!allowedUser;
       }
-      console.log(`[AUTH] Email ${user.email} ${isAllowed ? 'IS' : 'IS NOT'} in allowed_users table`);
     } else {
       // No whitelist configured - allow all authenticated users (development mode)
-      console.log("[AUTH] No whitelist configured - allowing all authenticated users (development mode)");
       isAllowed = true;
       whitelistConfigured = false;
     }
     
-    // If whitelist is configured and user is not allowed, deny access
-    if (whitelistConfigured && !isAllowed) {
-      console.log(`[AUTH] Access DENIED for email: ${user.email}`);
-      await supabase.auth.signOut();
-      return NextResponse.redirect(new URL("/?error=unauthorized", origin));
-    }
-    
-    if (whitelistConfigured && isAllowed) {
-      console.log(`[AUTH] Access GRANTED for email: ${user.email}`);
-    }
+    return NextResponse.json({
+      allowed: isAllowed,
+      whitelistConfigured,
+      email: user.email,
+    });
+  } catch (error) {
+    console.error("[AUTH] Error checking authorization:", error);
+    return NextResponse.json({ allowed: false, reason: "error" }, { status: 500 });
   }
-
-  // Redirect to home page after successful authentication
-  return NextResponse.redirect(new URL("/", origin));
 }
-
 

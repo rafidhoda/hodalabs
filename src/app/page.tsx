@@ -80,12 +80,48 @@ export default function Home() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
     // Check auth
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setUser(session?.user ?? null);
+      
+      // If user is authenticated, check if they're whitelisted
+      if (session?.user) {
+        try {
+          const response = await fetch("/api/check-auth");
+          const data = await response.json();
+          
+          if (data.whitelistConfigured && !data.allowed) {
+            // User is not whitelisted, sign them out
+            console.log(`[AUTH] User ${data.email} is not whitelisted, signing out`);
+            await supabase.auth.signOut();
+            window.location.href = "/?error=unauthorized";
+            return;
+          }
+        } catch (error) {
+          console.error("[AUTH] Error checking authorization:", error);
+        }
+      }
     });
 
-    supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null);
+      
+      // If user is authenticated, check if they're whitelisted
+      if (session?.user) {
+        try {
+          const response = await fetch("/api/check-auth");
+          const data = await response.json();
+          
+          if (data.whitelistConfigured && !data.allowed) {
+            // User is not whitelisted, sign them out
+            console.log(`[AUTH] User ${data.email} is not whitelisted, signing out`);
+            await supabase.auth.signOut();
+            window.location.href = "/?error=unauthorized";
+            return;
+          }
+        } catch (error) {
+          console.error("[AUTH] Error checking authorization:", error);
+        }
+      }
     });
   }, []);
 
