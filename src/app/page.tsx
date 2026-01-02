@@ -20,6 +20,8 @@ interface DashboardData {
     totalIncomeNOK: number;
     totalExpensesNOK: number;
     totalProfitNOK: number;
+    totalSalaryNOK: number;
+    salaryByCurrency: Record<string, number>;
     incomeByCurrency: Record<string, number>;
     expensesByCurrency: Record<string, number>;
     profitByCurrency: Record<string, number>;
@@ -275,6 +277,31 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Salary Expenses Card (for tax tracking) */}
+            {dashboardData.summary.totalSalaryNOK > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                  Salary Expenses (Taxable)
+                </p>
+                <p className="mt-2 text-3xl font-bold text-amber-700 dark:text-amber-300">
+                  {formatCurrency(dashboardData.summary.totalSalaryNOK, "NOK")}
+                </p>
+                {Object.entries(dashboardData.summary.salaryByCurrency).map(([currency, amount]) => (
+                  <p key={currency} className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+                    {formatCurrency(amount, currency)}
+                    {currency === "USD" && dashboardData.summary.exchangeRate && (
+                      <span className="ml-1 text-xs">
+                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
+                      </span>
+                    )}
+                  </p>
+                ))}
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  Track this separately for tax reporting purposes
+                </p>
+              </div>
+            )}
+
             {/* Project Breakdown */}
             {dashboardData.projectBreakdown.length > 0 && (
               <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
@@ -479,7 +506,7 @@ export default function Home() {
             )}
           </div>
         )}
-      </div>
+        </div>
     </div>
   );
 }

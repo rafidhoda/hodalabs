@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseServiceClient } from "@/lib/supabaseClient";
 
 interface Transaction {
-  stripe_payment_id: string;
+  stripe_payment_id?: string;
   amount: number;
   currency: string;
+  archive_reference?: string;
+  bank_reference?: string;
 }
 
 // Normalize payment ID for comparison (case-insensitive, trimmed)
@@ -17,14 +19,23 @@ function paymentIdsMatch(id1: string, id2: string): boolean {
   return normalizePaymentId(id1) === normalizePaymentId(id2);
 }
 
-// Check if transaction matches by payment ID, amount, and currency
+// Check if transaction matches by identifier, amount, and currency
 function transactionMatches(
   extracted: Transaction,
-  dbTransaction: Transaction
+  dbTransaction: any
 ): boolean {
-  // Primary: Match by payment ID (case-insensitive)
-  if (paymentIdsMatch(extracted.stripe_payment_id, dbTransaction.stripe_payment_id)) {
-    return true;
+  // For bank statements: match by archive_reference
+  if (extracted.archive_reference && dbTransaction.archive_reference) {
+    if (normalizePaymentId(extracted.archive_reference) === normalizePaymentId(dbTransaction.archive_reference)) {
+      return true;
+    }
+  }
+
+  // For Stripe: match by source_reference (stripe_payment_id)
+  if (extracted.stripe_payment_id && dbTransaction.source_reference) {
+    if (paymentIdsMatch(extracted.stripe_payment_id, dbTransaction.source_reference)) {
+      return true;
+    }
   }
 
   // Fallback: Match by amount + currency (for OCR errors in payment ID)
@@ -33,12 +44,14 @@ function transactionMatches(
     extracted.amount === dbTransaction.amount &&
     normalizePaymentId(extracted.currency) === normalizePaymentId(dbTransaction.currency)
   ) {
-    // Additional check: payment IDs should be similar length (within 5 chars)
-    const lenDiff = Math.abs(
-      extracted.stripe_payment_id.length - dbTransaction.stripe_payment_id.length
-    );
-    if (lenDiff <= 5) {
-      return true;
+    // Additional check: identifiers should be similar length (within 5 chars)
+    const extractedId = extracted.stripe_payment_id || extracted.archive_reference || "";
+    const dbId = dbTransaction.source_reference || dbTransaction.archive_reference || "";
+    if (extractedId && dbId) {
+      const lenDiff = Math.abs(extractedId.length - dbId.length);
+      if (lenDiff <= 5) {
+        return true;
+      }
     }
   }
 
@@ -59,7 +72,7 @@ export async function POST(request: NextRequest) {
     // Validate transactions have required fields
     const validTransactions = transactions.filter((t: Transaction) => {
       return (
-        t.stripe_payment_id &&
+        (t.stripe_payment_id || t.archive_reference || t.bank_reference) &&
         typeof t.amount === "number" &&
         t.currency
       );
@@ -79,7 +92,7 @@ export async function POST(request: NextRequest) {
     // Fetch ALL transactions from database
     const { data: allDbTransactions, error } = await supabase
       .from("transactions")
-      .select("stripe_payment_id, amount, currency");
+      .select("source_reference, archive_reference, amount, currency, source_type");
 
     if (error) {
       console.error("Error fetching transactions:", error);
@@ -97,28 +110,37 @@ export async function POST(request: NextRequest) {
     const matchDetails: Array<{
       extractedId: string;
       matchedId: string;
-      matchType: "payment_id" | "amount_currency";
+      matchType: "payment_id" | "archive_reference" | "amount_currency";
     }> = [];
 
     for (const extracted of validTransactions) {
+      // Use archive_reference for bank statements, stripe_payment_id for Stripe
+      const extractedId = extracted.archive_reference || extracted.stripe_payment_id || extracted.bank_reference || "";
+      
       for (const dbTxn of allDbTransactions || []) {
         if (transactionMatches(extracted, dbTxn)) {
-          const matchType = paymentIdsMatch(
-            extracted.stripe_payment_id,
-            dbTxn.stripe_payment_id
-          )
-            ? "payment_id"
-            : "amount_currency";
+          const dbId = dbTxn.archive_reference || dbTxn.source_reference || "";
+          
+          let matchType: "payment_id" | "archive_reference" | "amount_currency";
+          if (extracted.archive_reference && dbTxn.archive_reference) {
+            matchType = "archive_reference";
+          } else if (extracted.stripe_payment_id && dbTxn.source_reference) {
+            matchType = paymentIdsMatch(extracted.stripe_payment_id, dbTxn.source_reference)
+              ? "payment_id"
+              : "amount_currency";
+          } else {
+            matchType = "amount_currency";
+          }
 
-          matchedExtractedIds.add(extracted.stripe_payment_id);
+          matchedExtractedIds.add(normalizePaymentId(extractedId));
           matchDetails.push({
-            extractedId: extracted.stripe_payment_id,
-            matchedId: dbTxn.stripe_payment_id,
+            extractedId: extractedId,
+            matchedId: dbId,
             matchType,
           });
 
           console.log(
-            `Matched: ${extracted.stripe_payment_id} → ${dbTxn.stripe_payment_id} (${matchType})`
+            `Matched: ${extractedId} → ${dbId} (${matchType})`
           );
           break; // Found a match, move to next extracted transaction
         }

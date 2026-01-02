@@ -3,13 +3,17 @@
 import { useState } from "react";
 
 interface Transaction {
-  stripe_payment_id: string;
+  stripe_payment_id?: string;
   amount: number;
   currency: string;
   date?: string;
   customer_email?: string;
   status?: string;
   exists?: boolean;
+  counterparty?: string;
+  description?: string;
+  bank_reference?: string;
+  archive_reference?: string;
 }
 
 interface CSVTransaction {
@@ -32,6 +36,7 @@ export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [aiContext, setAiContext] = useState<string>("");
   
   // CSV state
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -88,6 +93,7 @@ export default function ImportPage() {
         body: JSON.stringify({
           image: base64,
           mimeType: file.type,
+          context: aiContext.trim() || undefined,
         }),
       });
 
@@ -122,7 +128,9 @@ export default function ImportPage() {
           );
 
           const transactionsWithFlags = extractedTransactions.map((t: Transaction) => {
-            const normalizedId = t.stripe_payment_id.toLowerCase().trim();
+            // Use archive_reference for bank statements, stripe_payment_id for Stripe
+            const identifier = t.archive_reference || t.stripe_payment_id || t.bank_reference || "";
+            const normalizedId = identifier.toLowerCase().trim();
             const exists = matchedIdsSet.has(normalizedId);
             return {
               ...t,
@@ -160,17 +168,44 @@ export default function ImportPage() {
     setError(null);
 
     try {
+      // Detect if user wants expenses based on context
+      const contextLower = aiContext.toLowerCase();
+      const isExpenseImport = contextLower.includes("expense") || 
+                              contextLower.includes("negative") ||
+                              contextLower.includes("only expenses");
+
       // Convert to new schema format
-      const transactionsToSave = newTransactions.map((t) => ({
-        type: "income" as const,
-        amount: Math.round(t.amount * 100), // Convert to minor units
-        currency: t.currency.toLowerCase(),
-        transaction_date: t.date || new Date().toISOString().split("T")[0],
-        source_type: "stripe" as const,
-        source_reference: t.stripe_payment_id,
-        customer_email: t.customer_email || null,
-        description: null,
-      }));
+      const transactionsToSave = newTransactions.map((t: any) => {
+        // Detect if it's a bank statement (has archive_reference, bank_reference, or doesn't match Stripe format)
+        const hasStripeId = t.stripe_payment_id && 
+                           (t.stripe_payment_id.startsWith("pi_") || 
+                            t.stripe_payment_id.startsWith("ch_") || 
+                            t.stripe_payment_id.startsWith("in_"));
+        const hasBankRef = t.archive_reference || t.bank_reference;
+        const isBankStatement = hasBankRef || (!hasStripeId && (t.counterparty || t.description));
+
+        // Detect salary payments: transfers to "Rafid Hoda" are salary
+        const counterpartyLower = (t.counterparty || "").toLowerCase();
+        const isSalary = counterpartyLower.includes("rafid hoda") || 
+                        counterpartyLower.includes("rafid") ||
+                        (t.description && t.description.toLowerCase().includes("salary"));
+
+        return {
+          type: isExpenseImport ? ("expense" as const) : ("income" as const),
+          amount: Math.round(t.amount * 100), // Convert to minor units
+          currency: t.currency.toLowerCase(),
+          transaction_date: t.date || new Date().toISOString().split("T")[0],
+          source_type: isBankStatement ? ("bank" as const) : ("stripe" as const),
+          source_reference: t.stripe_payment_id || t.archive_reference || t.bank_reference,
+          archive_reference: t.archive_reference || null,
+          bank_reference: t.bank_reference || null,
+          counterparty: t.counterparty || null,
+          customer_email: t.customer_email || null,
+          description: t.description || null,
+          transaction_type: t.description || null, // For bank statements, description often contains transaction type
+          category: isSalary ? "salary" : null, // Mark salary payments for tax tracking
+        };
+      });
 
       const response = await fetch("/api/save-transactions", {
         method: "POST",
@@ -186,10 +221,22 @@ export default function ImportPage() {
         throw new Error(data.error || "Failed to save transactions");
       }
 
-      setSuccess(true);
+      setImportResult({
+        imported: data.imported || newTransactions.length,
+        skipped: data.skipped || 0,
+      });
+
+      // Only show success if some were imported
+      if (data.imported > 0) {
+        setSuccess(true);
+      } else {
+        setError(`All transactions already exist. ${data.skipped || 0} transactions skipped.`);
+      }
+
       setTransactions([]);
       setFile(null);
       setPreview(null);
+      setAiContext("");
       setPreviewMode(false);
       const fileInput = document.getElementById("file-input") as HTMLInputElement;
       if (fileInput) fileInput.value = "";
@@ -448,7 +495,7 @@ export default function ImportPage() {
               htmlFor="file-input"
               className="mb-4 block text-sm font-medium text-black dark:text-zinc-50"
             >
-              Select Screenshot
+              Select Screenshot (Bank Statement or Transaction List)
             </label>
             <input
               id="file-input"
@@ -457,6 +504,26 @@ export default function ImportPage() {
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-blue-700 dark:text-gray-400"
             />
+
+            <div className="mt-4">
+              <label
+                htmlFor="ai-context"
+                className="mb-2 block text-sm font-medium text-black dark:text-zinc-50"
+              >
+                Additional Instructions (Optional)
+              </label>
+              <textarea
+                id="ai-context"
+                value={aiContext}
+                onChange={(e) => setAiContext(e.target.value)}
+                placeholder="e.g., 'Only import expenses (negative numbers)', 'This is a bank statement for December 2025', 'Ignore transactions before 2025-01-01'"
+                rows={3}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-black placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-zinc-50 dark:placeholder-gray-500"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Provide context to help the AI extract the right data. For expenses, mention "only expenses" or "negative numbers only".
+              </p>
+            </div>
 
             {preview && (
               <div className="mt-4">
@@ -577,41 +644,76 @@ export default function ImportPage() {
                           Date
                         </th>
                       )}
+                      {(transactions[0]?.counterparty || transactions[0]?.description) && (
+                        <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                          Details
+                        </th>
+                      )}
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        Category
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
-                    {transactions.map((transaction, index) => (
-                      <tr
-                        key={index}
-                        className={
-                          transaction.exists
-                            ? "bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500"
-                            : ""
-                        }
-                      >
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          <div className="flex items-center gap-2">
-                            {transaction.stripe_payment_id}
-                            {transaction.exists && (
-                              <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
-                                Exists
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                          {formatAmount(transaction.amount, transaction.currency)}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                          {transaction.currency.toUpperCase()}
-                        </td>
-                        {transaction.date && (
-                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                            {transaction.date}
+                    {transactions.map((transaction, index) => {
+                      // Detect if this will be marked as salary
+                      const counterpartyLower = (transaction.counterparty || "").toLowerCase();
+                      const isSalary = counterpartyLower.includes("rafid hoda") || 
+                                      counterpartyLower.includes("rafid") ||
+                                      (transaction.description && transaction.description.toLowerCase().includes("salary"));
+                      
+                      return (
+                        <tr
+                          key={index}
+                          className={
+                            transaction.exists
+                              ? "bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500"
+                              : ""
+                          }
+                        >
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                            <div className="flex items-center gap-2">
+                              {transaction.stripe_payment_id || transaction.archive_reference || transaction.bank_reference || "N/A"}
+                              {transaction.exists && (
+                                <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
+                                  Exists
+                                </span>
+                              )}
+                            </div>
                           </td>
-                        )}
-                      </tr>
-                    ))}
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
+                            {formatAmount(transaction.amount, transaction.currency)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                            {transaction.currency.toUpperCase()}
+                          </td>
+                          {transaction.date && (
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                              {transaction.date}
+                            </td>
+                          )}
+                          {(transaction.counterparty || transaction.description) && (
+                            <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                              {transaction.counterparty && (
+                                <div className="font-medium">{transaction.counterparty}</div>
+                              )}
+                              {transaction.description && (
+                                <div className="text-xs text-gray-400">{transaction.description}</div>
+                              )}
+                            </td>
+                          )}
+                          <td className="whitespace-nowrap px-4 py-3 text-sm">
+                            {isSalary ? (
+                              <span className="px-2 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 text-xs font-medium">
+                                Salary
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

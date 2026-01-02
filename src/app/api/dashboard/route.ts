@@ -41,6 +41,19 @@ export async function GET(request: NextRequest) {
       .gte("transaction_date", `${year}-01-01`)
       .lte("transaction_date", `${year}-12-31`);
 
+    // Get salary expenses separately for tax tracking
+    const { data: salaryExpenses, error: salaryError } = await supabase
+      .from("transactions")
+      .select("amount, currency")
+      .eq("type", "expense")
+      .eq("category", "salary")
+      .gte("transaction_date", `${year}-01-01`)
+      .lte("transaction_date", `${year}-12-31`);
+
+    if (salaryError) {
+      console.error("Error fetching salary expenses:", salaryError);
+    }
+
     if (countError) {
       console.error("Error counting transactions:", countError);
     }
@@ -48,6 +61,17 @@ export async function GET(request: NextRequest) {
     // Exchange rate: USD to NOK (approximate, can be made configurable)
     // Using ~10.5 NOK per USD as a reasonable default for 2025
     const USD_TO_NOK_RATE = 10.5;
+
+    // Calculate salary expenses separately
+    let totalSalaryNOK = 0;
+    const salaryByCurrency: Record<string, number> = {};
+    (salaryExpenses || []).forEach((s: any) => {
+      const amount = Number(s.amount) / 100; // Convert from minor units
+      const currency = s.currency.toUpperCase();
+      salaryByCurrency[currency] = (salaryByCurrency[currency] || 0) + amount;
+      const amountInNOK = currency === "USD" ? amount * USD_TO_NOK_RATE : amount;
+      totalSalaryNOK += amountInNOK;
+    });
 
     // Process summary data - convert everything to NOK for totals
     const incomeByCurrency: Record<string, number> = {};
@@ -193,6 +217,9 @@ export async function GET(request: NextRequest) {
         totalIncomeNOK: Math.round(totalIncomeNOK * 100) / 100,
         totalExpensesNOK: Math.round(totalExpensesNOK * 100) / 100,
         totalProfitNOK: Math.round((totalIncomeNOK - totalExpensesNOK) * 100) / 100,
+        // Salary expenses (for tax tracking)
+        totalSalaryNOK: Math.round(totalSalaryNOK * 100) / 100,
+        salaryByCurrency,
         // Per-currency breakdowns
         incomeByCurrency,
         expensesByCurrency,
