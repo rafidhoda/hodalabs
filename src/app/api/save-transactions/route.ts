@@ -15,19 +15,25 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseServiceClient();
 
     // Insert transactions using service role (bypasses RLS)
+    // Map to new schema format
+    const transactionsToInsert = transactions.map((t: any) => ({
+      type: t.type || "income",
+      amount: t.amount,
+      currency: t.currency.toLowerCase(),
+      transaction_date: t.transaction_date || new Date().toISOString().split("T")[0],
+      source_type: t.source_type || "stripe",
+      source_reference: t.source_reference || t.stripe_payment_id,
+      project_id: t.project_id || null,
+      customer_email: t.customer_email || null,
+      description: t.description || null,
+    }));
+
     const { error: insertError } = await supabase
       .from("transactions")
-      .upsert(
-        transactions.map((t: any) => ({
-          stripe_payment_id: t.stripe_payment_id,
-          amount: t.amount,
-          currency: t.currency.toLowerCase(),
-        })),
-        {
-          onConflict: "stripe_payment_id",
-          ignoreDuplicates: false,
-        }
-      );
+      .upsert(transactionsToInsert, {
+        onConflict: "source_reference",
+        ignoreDuplicates: false,
+      });
 
     if (insertError) {
       console.error("Error inserting transactions:", insertError);
