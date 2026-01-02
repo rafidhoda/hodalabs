@@ -4,18 +4,44 @@ import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { SignInButton } from "@/components/SignInButton";
 
-interface Transaction {
-  id: string;
-  stripe_payment_id: string;
-  amount: number;
-  currency: string;
-  created_at: string;
+interface DashboardData {
+  year: number;
+  summary: {
+    totalIncomeNOK: number;
+    totalExpensesNOK: number;
+    totalProfitNOK: number;
+    incomeByCurrency: Record<string, number>;
+    expensesByCurrency: Record<string, number>;
+    profitByCurrency: Record<string, number>;
+    exchangeRate?: number;
+  };
+  projectBreakdown: Array<{
+    project_id: string;
+    project_name: string;
+    currencies: Array<{
+      currency: string;
+      income: number;
+      expenses: number;
+      profit: number;
+    }>;
+  }>;
+  monthlyBreakdown: Array<{
+    month: string;
+    currencies: Array<{
+      currency: string;
+      income: number;
+      expenses: number;
+      profit: number;
+    }>;
+  }>;
+  transactionCount: number;
 }
 
 export default function Home() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -37,61 +63,48 @@ export default function Home() {
     supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
-
-    // Fetch transactions
-    const fetchTransactions = async () => {
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) {
-        console.error("Error fetching transactions:", error);
-      } else {
-        setTransactions(data || []);
-      }
-      setLoading(false);
-    };
-
-    fetchTransactions();
-
-    // Subscribe to real-time updates
-    const channel = supabase
-      .channel("transactions_changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "transactions",
-        },
-        (payload) => {
-          setTransactions((prev) => [payload.new as Transaction, ...prev]);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, []);
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-    if (diffInSeconds < 60) return "just now";
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
-    return date.toLocaleDateString();
+    const fetchDashboardData = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/dashboard?year=${year}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to fetch dashboard data");
+        }
+
+        setDashboardData(data);
+      } catch (error) {
+        console.error("Error fetching dashboard:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, [user, year]);
+
+  const formatCurrency = (amount: number, currency: string = "NOK") => {
+    return new Intl.NumberFormat("no-NO", {
+      style: "currency",
+      currency: currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
   };
 
-  const formatAmount = (amount: number, currency: string) => {
-    // Amount is already in major units (NOK, USD, etc.)
-    return `${currency.toUpperCase()} ${amount.toLocaleString()}`;
+  const formatMonth = (monthStr: string) => {
+    const [year, month] = monthStr.split("-");
+    const date = new Date(parseInt(year), parseInt(month) - 1);
+    return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   };
 
   if (!user) {
@@ -110,60 +123,241 @@ export default function Home() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-        <div className="text-zinc-600 dark:text-zinc-400">Loading feed...</div>
+        <div className="text-zinc-600 dark:text-zinc-400">Loading dashboard...</div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <div className="mx-auto max-w-2xl px-4 py-8">
-        <h1 className="mb-8 text-4xl font-bold tracking-tight text-black dark:text-zinc-50">
-          Feed
-        </h1>
+      <div className="mx-auto max-w-7xl px-4 py-8">
+        <div className="mb-8 flex items-center justify-between">
+          <h1 className="text-4xl font-bold tracking-tight text-black dark:text-zinc-50">
+            Revenue Dashboard
+          </h1>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setYear(2025)}
+              className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                year === 2025
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              }`}
+            >
+              2025
+            </button>
+            <button
+              onClick={() => setYear(2026)}
+              className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                year === 2026
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              }`}
+            >
+              2026
+            </button>
+          </div>
+        </div>
 
-        {transactions.length === 0 ? (
+        {!dashboardData ? (
           <div className="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-gray-800 dark:bg-gray-900">
-            <p className="text-zinc-600 dark:text-zinc-400">
-              No transactions yet. Set up your Zapier webhooks to start seeing data here!
-            </p>
+            <p className="text-zinc-600 dark:text-zinc-400">No data available for {year}</p>
           </div>
         ) : (
-          <div className="space-y-4">
-            {transactions.map((transaction) => (
-              <div
-                key={transaction.id}
-                className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md dark:border-gray-800 dark:bg-gray-900"
-              >
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-                    <span className="text-xl">💰</span>
-                  </div>
-
-                  <div className="flex-1">
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                        stripe
+          <div className="space-y-6">
+            {/* Summary Cards - Combined Total in NOK */}
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+              <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
+                <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Total Income</p>
+                <p className="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
+                  {formatCurrency(dashboardData.summary.totalIncomeNOK, "NOK")}
+                </p>
+                {Object.entries(dashboardData.summary.incomeByCurrency).map(([currency, amount]) => (
+                  <p key={currency} className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    {formatCurrency(amount, currency)}
+                    {currency === "USD" && dashboardData.summary.exchangeRate && (
+                      <span className="ml-1 text-xs">
+                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
                       </span>
-                      <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                        •
-                      </span>
-                      <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                        {formatDate(transaction.created_at)}
-                      </span>
-                    </div>
+                    )}
+                  </p>
+                ))}
+              </div>
 
-                    <h2 className="mb-2 text-lg font-semibold text-black dark:text-zinc-50">
-                      Payment received: {formatAmount(transaction.amount, transaction.currency)}
-                    </h2>
+              <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
+                <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Total Expenses</p>
+                <p className="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
+                  {formatCurrency(dashboardData.summary.totalExpensesNOK, "NOK")}
+                </p>
+                {Object.entries(dashboardData.summary.expensesByCurrency).map(([currency, amount]) => (
+                  <p key={currency} className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    {formatCurrency(amount, currency)}
+                    {currency === "USD" && dashboardData.summary.exchangeRate && (
+                      <span className="ml-1 text-xs">
+                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
+                      </span>
+                    )}
+                  </p>
+                ))}
+              </div>
 
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                      {transaction.stripe_payment_id}
-                    </p>
+              <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
+                <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Profit</p>
+                <p
+                  className={`mt-2 text-3xl font-bold ${
+                    dashboardData.summary.totalProfitNOK >= 0
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-red-600 dark:text-red-400"
+                  }`}
+                >
+                  {formatCurrency(dashboardData.summary.totalProfitNOK, "NOK")}
+                </p>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  {dashboardData.transactionCount} transactions
+                </p>
+                {dashboardData.summary.exchangeRate && (
+                  <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                    USD rate: {dashboardData.summary.exchangeRate} NOK
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Project Breakdown */}
+            {dashboardData.projectBreakdown.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+                <div className="p-6">
+                  <h2 className="mb-4 text-xl font-semibold text-black dark:text-zinc-50">
+                    Revenue by Project
+                  </h2>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                      <thead className="bg-gray-50 dark:bg-gray-800">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Project
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Currency
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Income
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Expenses
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Profit
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
+                        {dashboardData.projectBreakdown.map((project) =>
+                          project.currencies.map((currencyData, idx) => (
+                            <tr key={`${project.project_id}-${currencyData.currency}`}>
+                              {idx === 0 && (
+                                <td
+                                  rowSpan={project.currencies.length}
+                                  className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900 dark:text-zinc-50"
+                                >
+                                  {project.project_name}
+                                </td>
+                              )}
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                                {currencyData.currency}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
+                                {formatCurrency(currencyData.income, currencyData.currency)}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
+                                {formatCurrency(currencyData.expenses, currencyData.currency)}
+                              </td>
+                              <td
+                                className={`whitespace-nowrap px-4 py-3 text-sm text-right font-medium ${
+                                  currencyData.profit >= 0
+                                    ? "text-green-600 dark:text-green-400"
+                                    : "text-red-600 dark:text-red-400"
+                                }`}
+                              >
+                                {formatCurrency(currencyData.profit, currencyData.currency)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
-            ))}
+            )}
+
+            {/* Monthly Breakdown */}
+            {dashboardData.monthlyBreakdown.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+                <div className="p-6">
+                  <h2 className="mb-4 text-xl font-semibold text-black dark:text-zinc-50">
+                    Monthly Breakdown
+                  </h2>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                      <thead className="bg-gray-50 dark:bg-gray-800">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Month
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Currency
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Income
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Expenses
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Profit
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
+                        {dashboardData.monthlyBreakdown.map((month) =>
+                          month.currencies.map((currencyData, idx) => (
+                            <tr key={`${month.month}-${currencyData.currency}`}>
+                              {idx === 0 && (
+                                <td
+                                  rowSpan={month.currencies.length}
+                                  className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900 dark:text-zinc-50"
+                                >
+                                  {formatMonth(month.month)}
+                                </td>
+                              )}
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                                {currencyData.currency}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
+                                {formatCurrency(currencyData.income, currencyData.currency)}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
+                                {formatCurrency(currencyData.expenses, currencyData.currency)}
+                              </td>
+                              <td
+                                className={`whitespace-nowrap px-4 py-3 text-sm text-right font-medium ${
+                                  currencyData.profit >= 0
+                                    ? "text-green-600 dark:text-green-400"
+                                    : "text-red-600 dark:text-red-400"
+                                }`}
+                              >
+                                {formatCurrency(currencyData.profit, currencyData.currency)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
