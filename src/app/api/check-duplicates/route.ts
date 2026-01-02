@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
     // Fetch ALL transactions from database
     const { data: allDbTransactions, error } = await supabase
       .from("transactions")
-      .select("source_reference, archive_reference, amount, currency, source_type");
+      .select("source_reference, archive_reference, amount, currency, source_type, transaction_date, counterparty");
 
     if (error) {
       console.error("Error fetching transactions:", error);
@@ -114,8 +114,10 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const extracted of validTransactions) {
+      // For bank statements, prioritize archive_reference matching
       // Use archive_reference for bank statements, stripe_payment_id for Stripe
       const extractedId = extracted.archive_reference || extracted.stripe_payment_id || extracted.bank_reference || "";
+      let matched = false;
       
       for (const dbTxn of allDbTransactions || []) {
         if (transactionMatches(extracted, dbTxn)) {
@@ -124,15 +126,18 @@ export async function POST(request: NextRequest) {
           let matchType: "payment_id" | "archive_reference" | "amount_currency";
           if (extracted.archive_reference && dbTxn.archive_reference) {
             matchType = "archive_reference";
+            // For archive_reference matches, use the archive_reference as the key
+            matchedExtractedIds.add(normalizePaymentId(extracted.archive_reference));
           } else if (extracted.stripe_payment_id && dbTxn.source_reference) {
             matchType = paymentIdsMatch(extracted.stripe_payment_id, dbTxn.source_reference)
               ? "payment_id"
               : "amount_currency";
+            matchedExtractedIds.add(normalizePaymentId(extracted.stripe_payment_id));
           } else {
             matchType = "amount_currency";
+            matchedExtractedIds.add(normalizePaymentId(extractedId));
           }
 
-          matchedExtractedIds.add(normalizePaymentId(extractedId));
           matchDetails.push({
             extractedId: extractedId,
             matchedId: dbId,
@@ -142,8 +147,14 @@ export async function POST(request: NextRequest) {
           console.log(
             `Matched: ${extractedId} → ${dbId} (${matchType})`
           );
+          matched = true;
           break; // Found a match, move to next extracted transaction
         }
+      }
+      
+      // If no match found, log it for debugging
+      if (!matched) {
+        console.log(`No match found for: ${extractedId} (archive_ref: ${extracted.archive_reference}, amount: ${extracted.amount}, currency: ${extracted.currency})`);
       }
     }
 

@@ -200,11 +200,28 @@ VALIDATION REQUIREMENTS:
 
       return true;
     }).map((t) => {
-      // Create a source_reference if missing (for bank statements)
-      let sourceReference = t.stripe_payment_id || t.archive_reference || t.bank_reference;
-      if (!sourceReference && t.date && t.amount && t.counterparty) {
-        // Generate a composite ID for bank statements without explicit reference
-        sourceReference = `bank_${t.date}_${t.amount}_${String(t.counterparty).substring(0, 20).replace(/\s+/g, '_')}`;
+      // For bank statements: prioritize archive_reference, then bank_reference, then generate composite
+      // For Stripe: use stripe_payment_id
+      let sourceReference = t.stripe_payment_id;
+      
+      // If it's a bank statement (has archive_reference or bank_reference, or no Stripe ID format)
+      const hasStripeFormat = t.stripe_payment_id && 
+                             (t.stripe_payment_id.startsWith("pi_") || 
+                              t.stripe_payment_id.startsWith("ch_") || 
+                              t.stripe_payment_id.startsWith("in_"));
+      
+      if (!hasStripeFormat) {
+        // Bank statement: use archive_reference as primary, bank_reference as fallback
+        sourceReference = t.archive_reference || t.bank_reference;
+        
+        // If still no reference, generate composite ID
+        if (!sourceReference && t.date && t.amount && (t.counterparty || t.description)) {
+          const identifier = (t.counterparty || t.description || "unknown")
+            .substring(0, 20)
+            .replace(/\s+/g, '_')
+            .replace(/[^a-zA-Z0-9_]/g, '');
+          sourceReference = `bank_${t.date}_${t.amount}_${identifier}`;
+        }
       }
 
       return {

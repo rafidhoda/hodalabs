@@ -14,6 +14,7 @@ interface Transaction {
   description?: string;
   bank_reference?: string;
   archive_reference?: string;
+  category?: string;
 }
 
 interface CSVTransaction {
@@ -128,8 +129,16 @@ export default function ImportPage() {
           );
 
           const transactionsWithFlags = extractedTransactions.map((t: Transaction) => {
-            // Use archive_reference for bank statements, stripe_payment_id for Stripe
-            const identifier = t.archive_reference || t.stripe_payment_id || t.bank_reference || "";
+            // For bank statements, check archive_reference first, then source_reference
+            // For Stripe, check stripe_payment_id
+            let identifier = "";
+            if (t.archive_reference) {
+              identifier = t.archive_reference;
+            } else if (t.stripe_payment_id) {
+              identifier = t.stripe_payment_id;
+            } else if (t.bank_reference) {
+              identifier = t.bank_reference;
+            }
             const normalizedId = identifier.toLowerCase().trim();
             const exists = matchedIdsSet.has(normalizedId);
             return {
@@ -190,6 +199,15 @@ export default function ImportPage() {
                         counterpartyLower.includes("rafid") ||
                         (t.description && t.description.toLowerCase().includes("salary"));
 
+        // Use manually set category if available, otherwise auto-detect
+        const category = t.category || (isSalary ? "salary" : null);
+
+        // For bank statements: use archive_reference if available, otherwise use generated source_reference
+        // But only set archive_reference if it was actually extracted (not generated)
+        const hasActualArchiveRef = t.archive_reference && 
+                                    !t.archive_reference.startsWith("bank_") && 
+                                    t.archive_reference.length > 5;
+        
         return {
           type: isExpenseImport ? ("expense" as const) : ("income" as const),
           amount: Math.round(t.amount * 100), // Convert to minor units
@@ -197,13 +215,15 @@ export default function ImportPage() {
           transaction_date: t.date || new Date().toISOString().split("T")[0],
           source_type: isBankStatement ? ("bank" as const) : ("stripe" as const),
           source_reference: t.stripe_payment_id || t.archive_reference || t.bank_reference,
-          archive_reference: t.archive_reference || null,
+          // Only set archive_reference if it was actually extracted from the bank statement
+          // Don't use generated composite IDs as archive_reference
+          archive_reference: hasActualArchiveRef ? t.archive_reference : null,
           bank_reference: t.bank_reference || null,
           counterparty: t.counterparty || null,
           customer_email: t.customer_email || null,
           description: t.description || null,
           transaction_type: t.description || null, // For bank statements, description often contains transaction type
-          category: isSalary ? "salary" : null, // Mark salary payments for tax tracking
+          category: category, // Use manually set or auto-detected category
         };
       });
 
@@ -656,11 +676,12 @@ export default function ImportPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
                     {transactions.map((transaction, index) => {
-                      // Detect if this will be marked as salary
+                      // Use manually set category or auto-detect salary
                       const counterpartyLower = (transaction.counterparty || "").toLowerCase();
-                      const isSalary = counterpartyLower.includes("rafid hoda") || 
-                                      counterpartyLower.includes("rafid") ||
-                                      (transaction.description && transaction.description.toLowerCase().includes("salary"));
+                      const autoDetectedSalary = counterpartyLower.includes("rafid hoda") || 
+                                               counterpartyLower.includes("rafid") ||
+                                               (transaction.description && transaction.description.toLowerCase().includes("salary"));
+                      const currentCategory = transaction.category || (autoDetectedSalary ? "salary" : undefined);
                       
                       return (
                         <tr
@@ -703,12 +724,39 @@ export default function ImportPage() {
                             </td>
                           )}
                           <td className="whitespace-nowrap px-4 py-3 text-sm">
-                            {isSalary ? (
-                              <span className="px-2 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 text-xs font-medium">
-                                Salary
+                            <select
+                              value={currentCategory || ""}
+                              onChange={(e) => {
+                                const updated = [...transactions];
+                                updated[index].category = e.target.value || undefined;
+                                setTransactions(updated);
+                              }}
+                              className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-zinc-50"
+                              disabled={transaction.exists}
+                            >
+                              <option value="">—</option>
+                              <option value="salary">Salary</option>
+                              <option value="software">Software</option>
+                              <option value="utilities">Utilities</option>
+                              <option value="office">Office</option>
+                              <option value="travel">Travel</option>
+                              <option value="marketing">Marketing</option>
+                              <option value="professional">Professional Services</option>
+                              <option value="equipment">Equipment</option>
+                              <option value="other">Other</option>
+                            </select>
+                            {currentCategory && (
+                              <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                                {currentCategory === "salary" && "💰"}
+                                {currentCategory === "software" && "💻"}
+                                {currentCategory === "utilities" && "⚡"}
+                                {currentCategory === "office" && "🏢"}
+                                {currentCategory === "travel" && "✈️"}
+                                {currentCategory === "marketing" && "📢"}
+                                {currentCategory === "professional" && "👔"}
+                                {currentCategory === "equipment" && "🖥️"}
+                                {currentCategory === "other" && "📦"}
                               </span>
-                            ) : (
-                              <span className="text-gray-400 text-xs">—</span>
                             )}
                           </td>
                         </tr>
