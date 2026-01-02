@@ -323,11 +323,17 @@ export default function ImportPage() {
     }
   };
 
+  const [importResult, setImportResult] = useState<{
+    imported: number;
+    skipped: number;
+  } | null>(null);
+
   const handleConfirmCSV = async () => {
     if (csvTransactions.length === 0) return;
 
     setSaving(true);
     setError(null);
+    setImportResult(null);
 
     try {
       const response = await fetch("/api/import-stripe-csv", {
@@ -344,7 +350,18 @@ export default function ImportPage() {
         throw new Error(data.error || "Failed to import transactions");
       }
 
-      setSuccess(true);
+      setImportResult({
+        imported: data.imported || 0,
+        skipped: data.skipped || 0,
+      });
+      
+      // Only show success if some were imported
+      if (data.imported > 0) {
+        setSuccess(true);
+      } else {
+        setError(`All transactions already exist. ${data.skipped || 0} transactions skipped.`);
+      }
+
       setCsvTransactions([]);
       setCsvFile(null);
       setPreviewMode(false);
@@ -501,11 +518,16 @@ export default function ImportPage() {
         )}
 
         {/* Success Message */}
-        {success && (
+        {success && importResult && (
           <div className="mb-6 rounded-lg bg-green-50 border border-green-200 p-4 dark:bg-green-900/20 dark:border-green-800">
             <p className="text-green-800 dark:text-green-200 font-medium">Success!</p>
             <p className="text-green-700 dark:text-green-300 mt-1">
-              Transactions imported successfully
+              {importResult.imported} transaction{importResult.imported !== 1 ? "s" : ""} imported successfully
+              {importResult.skipped > 0 && (
+                <span className="block mt-1">
+                  {importResult.skipped} transaction{importResult.skipped !== 1 ? "s" : ""} skipped (already exist)
+                </span>
+              )}
             </p>
           </div>
         )}
