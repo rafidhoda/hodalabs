@@ -40,6 +40,7 @@ interface CSVTransaction {
   csvFormat?: "stripe" | "bank";
   category?: string;
   project_id?: string;
+  exists?: boolean;
 }
 
 type ImportMode = "screenshot" | "csv";
@@ -618,10 +619,86 @@ export default function ImportPage() {
 
     try {
       const parsed = await parseCSV(csvFile);
-      setCsvTransactions(parsed);
-      // Select all transactions by default
-      setCsvSelected(new Set(parsed.map((_, i) => i)));
-      setPreviewMode(true);
+      
+      // Check which transactions already exist
+      if (parsed.length > 0) {
+        try {
+          // Convert CSV transactions to format expected by check-duplicates API
+          const transactionsToCheck = parsed.map((csvTxn: CSVTransaction) => {
+            if (csvTxn.csvFormat === "bank") {
+              const isExpense = !!csvTxn.Ut;
+              const amountStr = isExpense ? csvTxn.Ut : csvTxn.Inn;
+              const amount = parseFloat(parseNorwegianNumber(amountStr || "0"));
+              
+              return {
+                archive_reference: csvTxn["Arkivref."],
+                bank_reference: csvTxn["Referanse"],
+                amount: amount,
+                currency: "nok",
+              };
+            } else {
+              // Stripe format
+              const amount = parseFloat(csvTxn.Amount?.replace(/[^0-9.-]/g, "") || "0");
+              const currency = csvTxn.Currency?.toLowerCase() || "usd";
+              
+              return {
+                stripe_payment_id: csvTxn["PaymentIntent ID"],
+                amount: amount,
+                currency: currency,
+              };
+            }
+          });
+
+          const checkResponse = await fetch("/api/check-duplicates", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ transactions: transactionsToCheck }),
+          });
+
+          if (!checkResponse.ok) {
+            const errorData = await checkResponse.json();
+            throw new Error(errorData.error || "Failed to check duplicates");
+          }
+
+          const checkData = await checkResponse.json();
+          const matchedExtractedIds = checkData.matchedExtractedIds || [];
+          const matchedIdsSet = new Set(
+            matchedExtractedIds.map((id: string) => id.toLowerCase().trim())
+          );
+
+          const transactionsWithFlags = parsed.map((csvTxn: CSVTransaction) => {
+            let identifier = "";
+            if (csvTxn.csvFormat === "bank") {
+              identifier = csvTxn["Arkivref."] || csvTxn["Referanse"] || "";
+            } else {
+              identifier = csvTxn["PaymentIntent ID"] || "";
+            }
+            const normalizedId = identifier.toLowerCase().trim();
+            const exists = matchedIdsSet.has(normalizedId);
+            return {
+              ...csvTxn,
+              exists,
+            };
+          });
+
+          setCsvTransactions(transactionsWithFlags);
+          // Select all transactions by default
+          setCsvSelected(new Set(transactionsWithFlags.map((_, i) => i)));
+          setPreviewMode(true);
+        } catch (checkError) {
+          console.error("Error checking duplicates:", checkError);
+          setCsvTransactions(parsed);
+          // Select all transactions by default
+          setCsvSelected(new Set(parsed.map((_, i) => i)));
+          setPreviewMode(true);
+        }
+      } else {
+        setCsvTransactions(parsed);
+        setCsvSelected(new Set());
+        setPreviewMode(true);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse CSV");
     } finally {
@@ -721,7 +798,7 @@ export default function ImportPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mx-auto max-w-full px-4 py-8">
         <h1 className="mb-8 text-4xl font-bold tracking-tight text-black dark:text-zinc-50">
           Import Transactions
         </h1>
@@ -1030,9 +1107,17 @@ export default function ImportPage() {
           <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
             <div className="p-6">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
-                  Preview ({csvTransactions.length} transactions)
-                </h2>
+                <div>
+                  <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                    Preview ({csvTransactions.length} transactions)
+                  </h2>
+                  {csvTransactions.filter((t) => t.exists).length > 0 && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                      {csvTransactions.filter((t) => !t.exists).length} new,{" "}
+                      {csvTransactions.filter((t) => t.exists).length} already exist
+                    </p>
+                  )}
+                </div>
                 <button
                   onClick={handleConfirmCSV}
                   disabled={saving || csvSelected.size === 0}
@@ -1124,7 +1209,14 @@ export default function ImportPage() {
                         const currentCategory = transaction.category || (autoDetectedSalary ? "salary" : undefined);
                         
                         return (
-                          <tr key={index}>
+                          <tr 
+                            key={index}
+                            className={
+                              transaction.exists
+                                ? "bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500"
+                                : ""
+                            }
+                          >
                             <td className="w-12 px-4 py-3">
                               <input
                                 type="checkbox"
@@ -1142,7 +1234,14 @@ export default function ImportPage() {
                               />
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                              {transaction["Bokført dato"] || "-"}
+                              <div className="flex items-center gap-2">
+                                {transaction["Bokført dato"] || "-"}
+                                {transaction.exists && (
+                                  <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
+                                    Exists
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
                               <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -1216,7 +1315,14 @@ export default function ImportPage() {
                         );
                       } else {
                         return (
-                          <tr key={index}>
+                          <tr 
+                            key={index}
+                            className={
+                              transaction.exists
+                                ? "bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500"
+                                : ""
+                            }
+                          >
                             <td className="w-12 px-4 py-3">
                               <input
                                 type="checkbox"
@@ -1237,7 +1343,14 @@ export default function ImportPage() {
                               {formatDate(transaction["Created date (UTC)"] || "")}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
-                              {transaction["PaymentIntent ID"] || "-"}
+                              <div className="flex items-center gap-2">
+                                {transaction["PaymentIntent ID"] || "-"}
+                                {transaction.exists && (
+                                  <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
+                                    Exists
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-zinc-50">
                               {formatCsvAmount(transaction.Amount || "", transaction.Currency || "USD")}
