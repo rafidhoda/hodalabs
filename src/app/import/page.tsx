@@ -1069,6 +1069,7 @@ export default function ImportPage() {
                             >
                               <option value="">—</option>
                               <option value="salary">Salary</option>
+                              <option value="contractors">Contractors</option>
                               <option value="software">Software</option>
                               <option value="utilities">Utilities</option>
                               <option value="office">Office</option>

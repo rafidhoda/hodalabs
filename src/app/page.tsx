@@ -64,6 +64,16 @@ export default function Home() {
     }
     return new Date().getFullYear();
   });
+  // Initialize currency from localStorage or default to NOK
+  const [displayCurrency, setDisplayCurrency] = useState<"NOK" | "USD">(() => {
+    if (typeof window !== "undefined") {
+      const savedCurrency = localStorage.getItem("dashboardCurrency");
+      if (savedCurrency === "USD" || savedCurrency === "NOK") {
+        return savedCurrency;
+      }
+    }
+    return "NOK";
+  });
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -135,17 +145,33 @@ export default function Home() {
     }).format(amount);
   };
 
+  // Exchange rate: USD to NOK (same as API)
+  const USD_TO_NOK_RATE = 10.5;
+
+  // Convert amount to display currency
+  const convertToDisplayCurrency = (amount: number, fromCurrency: string): number => {
+    if (displayCurrency === fromCurrency.toUpperCase()) {
+      return amount;
+    }
+    if (displayCurrency === "USD" && fromCurrency.toUpperCase() === "NOK") {
+      return amount / USD_TO_NOK_RATE;
+    }
+    if (displayCurrency === "NOK" && fromCurrency.toUpperCase() === "USD") {
+      return amount * USD_TO_NOK_RATE;
+    }
+    return amount;
+  };
+
   const formatMonth = (monthStr: string) => {
     const [year, month] = monthStr.split("-");
     const date = new Date(parseInt(year), parseInt(month) - 1);
     return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   };
 
-  // Prepare chart data: convert all currencies to NOK and aggregate by month
+  // Prepare chart data: convert all currencies to display currency and aggregate by month
   const prepareChartData = () => {
     if (!dashboardData) return [];
     
-    const exchangeRate = dashboardData.summary.exchangeRate || 10.5;
     const monthMap: Record<string, { income: number; expenses: number; profit: number }> = {};
 
     dashboardData.monthlyBreakdown.forEach((month) => {
@@ -154,20 +180,14 @@ export default function Home() {
       }
 
       month.currencies.forEach((currencyData) => {
-        // Convert to NOK
-        const incomeNOK = currencyData.currency === "USD" 
-          ? currencyData.income * exchangeRate 
-          : currencyData.income;
-        const expensesNOK = currencyData.currency === "USD"
-          ? currencyData.expenses * exchangeRate
-          : currencyData.expenses;
-        const profitNOK = currencyData.currency === "USD"
-          ? currencyData.profit * exchangeRate
-          : currencyData.profit;
+        // Convert to display currency
+        const incomeConverted = convertToDisplayCurrency(currencyData.income, currencyData.currency);
+        const expensesConverted = convertToDisplayCurrency(currencyData.expenses, currencyData.currency);
+        const profitConverted = convertToDisplayCurrency(currencyData.profit, currencyData.currency);
 
-        monthMap[month.month].income += incomeNOK;
-        monthMap[month.month].expenses += expensesNOK;
-        monthMap[month.month].profit += profitNOK;
+        monthMap[month.month].income += incomeConverted;
+        monthMap[month.month].expenses += expensesConverted;
+        monthMap[month.month].profit += profitConverted;
       });
     });
 
@@ -237,38 +257,74 @@ export default function Home() {
             Revenue Dashboard
           </h1>
           <div className="flex gap-2">
-            <button
-              onClick={() => {
-                setYear(2025);
-                if (typeof window !== "undefined") {
-                  localStorage.setItem("dashboardYear", "2025");
-                }
-              }}
-              disabled={loading}
-              className={`rounded-lg px-4 py-2 font-medium transition-colors ${
-                year === 2025
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
-            >
-              2025
-            </button>
-            <button
-              onClick={() => {
-                setYear(2026);
-                if (typeof window !== "undefined") {
-                  localStorage.setItem("dashboardYear", "2026");
-                }
-              }}
-              disabled={loading}
-              className={`rounded-lg px-4 py-2 font-medium transition-colors ${
-                year === 2026
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
-            >
-              2026
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setYear(2025);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("dashboardYear", "2025");
+                  }
+                }}
+                disabled={loading}
+                className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                  year === 2025
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                2025
+              </button>
+              <button
+                onClick={() => {
+                  setYear(2026);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("dashboardYear", "2026");
+                  }
+                }}
+                disabled={loading}
+                className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                  year === 2026
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                2026
+              </button>
+            </div>
+            <div className="flex gap-2 border-l border-gray-300 dark:border-gray-700 pl-4">
+              <button
+                onClick={() => {
+                  setDisplayCurrency("NOK");
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("dashboardCurrency", "NOK");
+                  }
+                }}
+                disabled={loading}
+                className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                  displayCurrency === "NOK"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                NOK
+              </button>
+              <button
+                onClick={() => {
+                  setDisplayCurrency("USD");
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("dashboardCurrency", "USD");
+                  }
+                }}
+                disabled={loading}
+                className={`rounded-lg px-4 py-2 font-medium transition-colors ${
+                  displayCurrency === "USD"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                USD
+              </button>
+            </div>
           </div>
         </div>
 
@@ -278,21 +334,16 @@ export default function Home() {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Summary Cards - Combined Total in NOK */}
+            {/* Summary Cards - Combined Total in Display Currency */}
             <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
               <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
                 <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Total Income</p>
                 <p className="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
-                  {formatCurrency(dashboardData.summary.totalIncomeNOK, "NOK")}
+                  {formatCurrency(convertToDisplayCurrency(dashboardData.summary.totalIncomeNOK, "NOK"), displayCurrency)}
                 </p>
                 {Object.entries(dashboardData.summary.incomeByCurrency).map(([currency, amount]) => (
                   <p key={currency} className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                    {formatCurrency(amount, currency)}
-                    {currency === "USD" && dashboardData.summary.exchangeRate && (
-                      <span className="ml-1 text-xs">
-                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
-                      </span>
-                    )}
+                    {formatCurrency(convertToDisplayCurrency(amount, currency), displayCurrency)}
                   </p>
                 ))}
               </div>
@@ -300,16 +351,11 @@ export default function Home() {
               <div className="rounded-lg border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
                 <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Total Expenses</p>
                 <p className="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
-                  {formatCurrency(dashboardData.summary.totalExpensesNOK, "NOK")}
+                  {formatCurrency(convertToDisplayCurrency(dashboardData.summary.totalExpensesNOK, "NOK"), displayCurrency)}
                 </p>
                 {Object.entries(dashboardData.summary.expensesByCurrency).map(([currency, amount]) => (
                   <p key={currency} className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                    {formatCurrency(amount, currency)}
-                    {currency === "USD" && dashboardData.summary.exchangeRate && (
-                      <span className="ml-1 text-xs">
-                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
-                      </span>
-                    )}
+                    {formatCurrency(convertToDisplayCurrency(amount, currency), displayCurrency)}
                   </p>
                 ))}
               </div>
@@ -323,7 +369,7 @@ export default function Home() {
                       : "text-red-600 dark:text-red-400"
                   }`}
                 >
-                  {formatCurrency(dashboardData.summary.totalProfitNOK, "NOK")}
+                  {formatCurrency(convertToDisplayCurrency(dashboardData.summary.totalProfitNOK, "NOK"), displayCurrency)}
                 </p>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                   {dashboardData.transactionCount} transactions
@@ -343,16 +389,11 @@ export default function Home() {
                   Salary Expenses (Taxable)
                 </p>
                 <p className="mt-2 text-3xl font-bold text-amber-700 dark:text-amber-300">
-                  {formatCurrency(dashboardData.summary.totalSalaryNOK, "NOK")}
+                  {formatCurrency(convertToDisplayCurrency(dashboardData.summary.totalSalaryNOK, "NOK"), displayCurrency)}
                 </p>
                 {Object.entries(dashboardData.summary.salaryByCurrency).map(([currency, amount]) => (
                   <p key={currency} className="mt-1 text-sm text-amber-600 dark:text-amber-400">
-                    {formatCurrency(amount, currency)}
-                    {currency === "USD" && dashboardData.summary.exchangeRate && (
-                      <span className="ml-1 text-xs">
-                        (≈ {formatCurrency(amount * dashboardData.summary.exchangeRate, "NOK")})
-                      </span>
-                    )}
+                    {formatCurrency(convertToDisplayCurrency(amount, currency), displayCurrency)}
                   </p>
                 ))}
                 <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
@@ -405,10 +446,10 @@ export default function Home() {
                                 {currencyData.currency}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
-                                {formatCurrency(currencyData.income, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.income, currencyData.currency), displayCurrency)}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
-                                {formatCurrency(currencyData.expenses, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.expenses, currencyData.currency), displayCurrency)}
                               </td>
                               <td
                                 className={`whitespace-nowrap px-4 py-3 text-sm text-right font-medium ${
@@ -417,7 +458,7 @@ export default function Home() {
                                     : "text-red-600 dark:text-red-400"
                                 }`}
                               >
-                                {formatCurrency(currencyData.profit, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.profit, currencyData.currency), displayCurrency)}
                               </td>
                             </tr>
                           ))
@@ -464,7 +505,7 @@ export default function Home() {
                             color: 'var(--tooltip-text, #000)',
                           }}
                           formatter={(value: number | undefined) => 
-                            value !== undefined ? formatCurrency(value, "NOK") : ""
+                            value !== undefined ? formatCurrency(value, displayCurrency) : ""
                           }
                           labelStyle={{ color: 'currentColor' }}
                         />
@@ -540,10 +581,10 @@ export default function Home() {
                                 {currencyData.currency}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
-                                {formatCurrency(currencyData.income, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.income, currencyData.currency), displayCurrency)}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3 text-sm text-right text-gray-900 dark:text-zinc-50">
-                                {formatCurrency(currencyData.expenses, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.expenses, currencyData.currency), displayCurrency)}
                               </td>
                               <td
                                 className={`whitespace-nowrap px-4 py-3 text-sm text-right font-medium ${
@@ -552,7 +593,7 @@ export default function Home() {
                                     : "text-red-600 dark:text-red-400"
                                 }`}
                               >
-                                {formatCurrency(currencyData.profit, currencyData.currency)}
+                                {formatCurrency(convertToDisplayCurrency(currencyData.profit, currencyData.currency), displayCurrency)}
                               </td>
                             </tr>
                           ))
