@@ -80,56 +80,12 @@ export default function Home() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
     // Check auth
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
-      
-      // If user is authenticated, check if they're whitelisted
-      if (session?.user) {
-        try {
-          const response = await fetch("/api/check-auth");
-          const data = await response.json();
-          
-          console.log(`[AUTH PAGE] Check result:`, data);
-          
-          if (data.whitelistConfigured && !data.allowed) {
-            // User is not whitelisted, sign them out
-            console.log(`[AUTH PAGE] User ${data.email} is not whitelisted, signing out`);
-            await supabase.auth.signOut();
-            window.location.href = "/?error=unauthorized";
-            return;
-          } else if (!data.whitelistConfigured) {
-            console.warn(`[AUTH PAGE] WARNING: No whitelist configured! All users are allowed. Set ALLOWED_EMAILS environment variable to enable access control.`);
-          }
-        } catch (error) {
-          console.error("[AUTH] Error checking authorization:", error);
-        }
-      }
     });
 
-    supabase.auth.onAuthStateChange(async (_event, session) => {
+    supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      
-      // If user is authenticated, check if they're whitelisted
-      if (session?.user) {
-        try {
-          const response = await fetch("/api/check-auth");
-          const data = await response.json();
-          
-          console.log(`[AUTH PAGE] Check result:`, data);
-          
-          if (data.whitelistConfigured && !data.allowed) {
-            // User is not whitelisted, sign them out
-            console.log(`[AUTH PAGE] User ${data.email} is not whitelisted, signing out`);
-            await supabase.auth.signOut();
-            window.location.href = "/?error=unauthorized";
-            return;
-          } else if (!data.whitelistConfigured) {
-            console.warn(`[AUTH PAGE] WARNING: No whitelist configured! All users are allowed. Set ALLOWED_EMAILS environment variable to enable access control.`);
-          }
-        } catch (error) {
-          console.error("[AUTH] Error checking authorization:", error);
-        }
-      }
     });
   }, []);
 
