@@ -7,3 +7,4 @@ INSERT INTO projects (name, description, status) VALUES
 ON CONFLICT DO NOTHING;
 
 
+

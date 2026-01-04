@@ -25,3 +25,4 @@ CREATE INDEX IF NOT EXISTS idx_allowed_users_email ON allowed_users(email);
 -- CREATE POLICY "Allow service role to read allowed_users" ON allowed_users
 --   FOR SELECT USING (true); -- Only service role can read (via API)
 
+
